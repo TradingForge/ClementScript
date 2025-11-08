@@ -25,9 +25,6 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 from typing import Dict, List, Tuple, Optional
-import openpyxl
-from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment
 
 # Configure logging
 logging.basicConfig(
@@ -490,175 +487,6 @@ class FootballTriadExtractor:
         except Exception as e:
             logger.error(f"Error creating timestamp file: {e}")
     
-    def create_excel_file(self, match_data: Dict, file_path: Path):
-        """Create detailed Excel file for a match"""
-        try:
-            wb = Workbook()
-            
-            # Remove default sheet
-            if 'Sheet' in wb.sheetnames:
-                wb.remove(wb['Sheet'])
-            
-            # Tab 1: Market Info
-            ws_info = wb.create_sheet('Market Info')
-            ws_info['A1'] = 'Field'
-            ws_info['B1'] = 'Value'
-            ws_info['A1'].font = Font(bold=True)
-            ws_info['B1'].font = Font(bold=True)
-            
-            info_rows = [
-                ('Market ID', match_data.get('market_id', '')),
-                ('Event Name', match_data.get('event_name', '')),
-                ('Home Team', match_data.get('home_team', '')),
-                ('Away Team', match_data.get('away_team', '')),
-                ('Country Code', match_data.get('div', '')),
-                ('Scheduled Kick-off', f"{match_data.get('date', '')} {match_data.get('time', '')}"),
-                ('Home Result', match_data.get('home_result', '')),
-                ('Away Result', match_data.get('away_result', '')),
-                ('Draw Result', match_data.get('draw_result', '')),
-                ('Home Odd HT', match_data.get('home_odd_ht', '')),
-                ('Away Odd HT', match_data.get('away_odd_ht', '')),
-                ('Draw Odd HT', match_data.get('draw_odd_ht', '')),
-                ('Triad Found', 'Yes' if match_data.get('triad') else 'No'),
-                ('Triad Timestamp', str(match_data.get('triad_timestamp', ''))),
-            ]
-            
-            for idx, (field, value) in enumerate(info_rows, start=2):
-                ws_info[f'A{idx}'] = field
-                ws_info[f'B{idx}'] = value
-            
-            ws_info.column_dimensions['A'].width = 20
-            ws_info.column_dimensions['B'].width = 40
-            
-            # Tab 2: All Ticks
-            ws_all = wb.create_sheet('All Ticks')
-            headers = ['Timestamp (ms)', 'Time (UTC)', 'Market ID', 'Runner ID', 'LTP']
-            ws_all.append(headers)
-            
-            for cell in ws_all[1]:
-                cell.font = Font(bold=True)
-            
-            for tick in match_data.get('all_ticks', []):
-                ws_all.append([
-                    tick['timestamp_ms'],
-                    tick['time'].strftime('%Y-%m-%d %H:%M:%S'),
-                    tick['market_id'],
-                    tick['runner_id'],
-                    tick['ltp']
-                ])
-            
-            # Set column widths
-            ws_all.column_dimensions['A'].width = 15
-            ws_all.column_dimensions['B'].width = 20
-            ws_all.column_dimensions['C'].width = 15
-            ws_all.column_dimensions['D'].width = 12
-            ws_all.column_dimensions['E'].width = 10
-            
-            # Tab 3: Filtered Ticks (within +55 to +60 window)
-            ws_filtered = wb.create_sheet('Filtered Ticks 55-60')
-            ws_filtered.append(headers)
-            
-            for cell in ws_filtered[1]:
-                cell.font = Font(bold=True)
-            
-            for tick in match_data.get('filtered_ticks', []):
-                ws_filtered.append([
-                    tick['timestamp_ms'],
-                    tick['time'].strftime('%Y-%m-%d %H:%M:%S'),
-                    tick['market_id'],
-                    tick['runner_id'],
-                    tick['ltp']
-                ])
-            
-            # Set column widths
-            ws_filtered.column_dimensions['A'].width = 15
-            ws_filtered.column_dimensions['B'].width = 20
-            ws_filtered.column_dimensions['C'].width = 15
-            ws_filtered.column_dimensions['D'].width = 12
-            ws_filtered.column_dimensions['E'].width = 10
-            
-            # Tab 4: Grouped Ticks (sorted by time, grouped by timestamp)
-            ws_grouped = wb.create_sheet('Grouped Ticks')
-            ws_grouped.append(headers)
-            
-            for cell in ws_grouped[1]:
-                cell.font = Font(bold=True)
-            
-            filtered_ticks = sorted(match_data.get('filtered_ticks', []), key=lambda x: (x['timestamp_ms'], x['runner_id']))
-            
-            current_ts = None
-            for tick in filtered_ticks:
-                # Add blank row between different timestamps
-                if current_ts is not None and tick['timestamp_ms'] != current_ts:
-                    ws_grouped.append(['', '', '', '', ''])
-                
-                ws_grouped.append([
-                    tick['timestamp_ms'],
-                    tick['time'].strftime('%Y-%m-%d %H:%M:%S'),
-                    tick['market_id'],
-                    tick['runner_id'],
-                    tick['ltp']
-                ])
-                
-                current_ts = tick['timestamp_ms']
-            
-            # Set column widths
-            ws_grouped.column_dimensions['A'].width = 15
-            ws_grouped.column_dimensions['B'].width = 20
-            ws_grouped.column_dimensions['C'].width = 15
-            ws_grouped.column_dimensions['D'].width = 12
-            ws_grouped.column_dimensions['E'].width = 10
-            
-            # Tab 5: Selected Triad
-            ws_triad = wb.create_sheet('Selected Triad')
-            ws_triad['A1'] = 'Field'
-            ws_triad['B1'] = 'Value'
-            ws_triad['A1'].font = Font(bold=True)
-            ws_triad['B1'].font = Font(bold=True)
-            
-            triad = match_data.get('triad')
-            if triad:
-                # Calculate max time difference safely
-                timestamps = [triad.get('home_ts'), triad.get('draw_ts'), triad.get('away_ts')]
-                valid_timestamps = [ts for ts in timestamps if ts is not None]
-                max_time_diff = ''
-                if len(valid_timestamps) >= 2:
-                    max_time_diff = (max(valid_timestamps) - min(valid_timestamps)) / 1000
-                
-                triad_rows = [
-                    ('Triad Timestamp', datetime.fromtimestamp(triad['timestamp'] / 1000).strftime('%Y-%m-%d %H:%M:%S')),
-                    ('Home Runner Timestamp', datetime.fromtimestamp(triad['home_ts'] / 1000).strftime('%Y-%m-%d %H:%M:%S') if triad.get('home_ts') else ''),
-                    ('Home LTP', triad.get('home_ltp', '')),
-                    ('Draw Runner Timestamp', datetime.fromtimestamp(triad['draw_ts'] / 1000).strftime('%Y-%m-%d %H:%M:%S') if triad.get('draw_ts') else ''),
-                    ('Draw LTP', triad.get('draw_ltp', '')),
-                    ('Away Runner Timestamp', datetime.fromtimestamp(triad['away_ts'] / 1000).strftime('%Y-%m-%d %H:%M:%S') if triad.get('away_ts') else ''),
-                    ('Away LTP', triad.get('away_ltp', '')),
-                    ('Max Time Difference (s)', max_time_diff),
-                ]
-                
-                for idx, (field, value) in enumerate(triad_rows, start=2):
-                    ws_triad[f'A{idx}'] = field
-                    ws_triad[f'B{idx}'] = value
-            else:
-                ws_triad['A2'] = 'No synchronized triad found in the +55 to +60 minute window'
-            
-            ws_triad.column_dimensions['A'].width = 25
-            ws_triad.column_dimensions['B'].width = 30
-            
-            # Create output directory structure
-            relative_path = file_path.relative_to(self.input_dir)
-            output_path = self.results_dir / relative_path.parent
-            output_path.mkdir(parents=True, exist_ok=True)
-            
-            excel_filename = f"betfair_market_{match_data.get('market_id', 'unknown')}_analysis.xlsx"
-            excel_path = output_path / excel_filename
-            
-            wb.save(excel_path)
-            logger.debug(f"Created Excel file: {excel_path}")
-            
-        except Exception as e:
-            logger.error(f"Error creating Excel file: {e}")
-
     def create_selection_csv(self, match_data: Dict, file_path: Path):
         """Create CSV with per-selection tick data (pt, pt_utc, marketId, selectionId, ltp)"""
         try:
@@ -968,9 +796,6 @@ class FootballTriadExtractor:
                 
                 # Create text file with timestamps
                 self.create_timestamp_text_file(match_data, file_path)
-                
-                # Create Excel file (disabled to speed up processing)
-                # self.create_excel_file(match_data, file_path)
 
                 # Create selections CSV
                 self.create_selection_csv(match_data, file_path)
@@ -987,22 +812,18 @@ class FootballTriadExtractor:
         
         return results
     
-    def write_csv_output(self, results: List[Dict], output_file: str = 'result.csv'):
-        """Write results to CSV file"""
-        logger.info(f"Writing results to {output_file}")
-        
-        headers = [
-            'Div', 'Date', 'Time', 'HomeTeam', 'AwayTeam',
-            'Home result', 'Away result', 'Draw result',
-            'Home odd HT', 'Away odd HT', 'Draw odd HT'
-        ]
+    def _write_rows_to_csv(self, file_path: Path, headers: List[str], rows: List[Dict]):
+        """Helper to write a list of match dictionaries to CSV."""
+        file_path = Path(file_path)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Writing results to {file_path}")
         
         try:
-            with open(output_file, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f, delimiter='\t')  # TSV format
+            with open(file_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
                 writer.writerow(headers)
                 
-                for match in results:
+                for match in rows:
                     writer.writerow([
                         match.get('div', ''),
                         match.get('date', ''),
@@ -1017,11 +838,30 @@ class FootballTriadExtractor:
                         match.get('draw_odd_ht', ''),
                     ])
             
-            logger.info(f"Successfully wrote {len(results)} matches to {output_file}")
-            
+            logger.info(f"Successfully wrote {len(rows)} matches to {file_path}")
+        
         except Exception as e:
-            logger.error(f"Error writing CSV file: {e}")
+            logger.error(f"Error writing CSV file '{file_path}': {e}")
             sys.exit(1)
+
+    def write_csv_output(self, results: List[Dict], output_file: str = 'result.csv'):
+        """Write full results CSV and a triad-only CSV."""
+        headers = [
+            'Div', 'Date', 'Time', 'HomeTeam', 'AwayTeam',
+            'Home result', 'Away result', 'Draw result',
+            'Home odd HT', 'Away odd HT', 'Draw odd HT'
+        ]
+        
+        output_path = Path(output_file)
+        self._write_rows_to_csv(output_path, headers, results)
+        
+        valid_results = [
+            match for match in results
+            if match.get('triad')
+            and all(match.get(field) not in (None, '') for field in ['home_odd_ht', 'away_odd_ht', 'draw_odd_ht'])
+        ]
+        valid_output_path = output_path.with_name('results_only_valid_triad.csv')
+        self._write_rows_to_csv(valid_output_path, headers, valid_results)
 
 
 def main():
@@ -1097,7 +937,7 @@ Examples:
     logger.info("=" * 70)
     logger.info("Processing complete!")
     logger.info(f"Results written to: {output_csv}")
-    logger.info(f"Excel files written to: {extractor.results_dir}")
+    logger.info(f"CSV files written to: {extractor.results_dir}")
     logger.info(f"Log file: football_60_triad.log")
     logger.info("=" * 70)
 
