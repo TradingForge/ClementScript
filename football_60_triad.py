@@ -26,12 +26,11 @@ from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 from typing import Dict, List, Tuple, Optional
 
-# Configure logging
+# Configure logging (console only)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('football_60_triad.log'),
         logging.StreamHandler(sys.stdout)
     ]
 )
@@ -41,11 +40,11 @@ logger = logging.getLogger(__name__)
 class FootballTriadExtractor:
     """Main class for extracting synchronized triads from football match data"""
     
-    def __init__(self, input_dir: str, output_dir: str, date_from: str = None, date_to: str = None):
+    def __init__(self, input_dir: str, output_dir: str, time_from: int = 55, time_to: int = 60):
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
-        self.date_from = self._parse_date(date_from) if date_from else None
-        self.date_to = self._parse_date(date_to) if date_to else None
+        self.time_from = time_from  # Minutes from match start
+        self.time_to = time_to      # Minutes from match start
         self.results_dir = Path('football_data_results')
         self.results_dir.mkdir(exist_ok=True)
         
@@ -56,52 +55,6 @@ class FootballTriadExtractor:
         self.matches_without_triads = 0
         self.errors = 0
         
-    @staticmethod
-    def _parse_date(date_str: str) -> datetime:
-        """Parse date string in YYYY-MM-DD format"""
-        try:
-            return datetime.strptime(date_str, '%Y-%m-%d')
-        except ValueError:
-            logger.error(f"Invalid date format: {date_str}. Use YYYY-MM-DD")
-            sys.exit(1)
-    
-    def _should_process_file(self, file_path: Path) -> bool:
-        """Check if file should be processed based on date range"""
-        if not self.date_from and not self.date_to:
-            return True
-        
-        # Extract date from path structure: .../YYYY/Month/Day/...
-        parts = file_path.parts
-        try:
-            year_idx = None
-            for i, part in enumerate(parts):
-                if part.isdigit() and len(part) == 4:
-                    year_idx = i
-                    break
-            
-            if year_idx is None or year_idx + 2 >= len(parts):
-                return True
-            
-            year = int(parts[year_idx])
-            month_str = parts[year_idx + 1]
-            day = int(parts[year_idx + 2])
-            
-            month_map = {
-                'Jan': 1, 'Feb': 2, 'Mar': 3, 'Apr': 4, 'May': 5, 'Jun': 6,
-                'Jul': 7, 'Aug': 8, 'Sep': 9, 'Oct': 10, 'Nov': 11, 'Dec': 12
-            }
-            month = month_map.get(month_str, 1)
-            
-            file_date = datetime(year, month, day)
-            
-            if self.date_from and file_date < self.date_from:
-                return False
-            if self.date_to and file_date > self.date_to:
-                return False
-            
-            return True
-        except (ValueError, IndexError):
-            return True
     
     @staticmethod
     def _normalize_timestamp(ts_value):
@@ -284,8 +237,8 @@ class FootballTriadExtractor:
         
         if market_time:
             market_time_utc = market_time.replace(tzinfo=timezone.utc)
-            window_start_utc = market_time_utc + timedelta(minutes=55)
-            window_end_utc = market_time_utc + timedelta(minutes=60)
+            window_start_utc = market_time_utc + timedelta(minutes=self.time_from)
+            window_end_utc = market_time_utc + timedelta(minutes=self.time_to)
             window_start_ms = int(window_start_utc.timestamp() * 1000)
             window_end_ms = int(window_end_utc.timestamp() * 1000)
             
@@ -771,16 +724,11 @@ class FootballTriadExtractor:
             for file in files:
                 if not file.endswith('.bz2') and not file.endswith('.xlsx') and not file.endswith('.log') and not file.endswith('.txt'):
                     file_path = Path(root) / file
-                    if self._should_process_file(file_path):
-                        all_files.append(file_path)
+                    all_files.append(file_path)
         
         self.total_files = len(all_files)
         logger.info(f"Found {self.total_files} files to process")
-        
-        if self.date_from:
-            logger.info(f"Date filter: FROM {self.date_from.strftime('%Y-%m-%d')}")
-        if self.date_to:
-            logger.info(f"Date filter: TO {self.date_to.strftime('%Y-%m-%d')}")
+        logger.info(f"Time window: +{self.time_from} to +{self.time_to} minutes from kick-off")
         
         results = []
         
@@ -871,14 +819,14 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Process all files
-  python football_60_triad_sonnet45.py
+  # Process all files with default 55-60 minute window
+  python football_60_triad.py
   
-  # Process files from May 2019
-  python football_60_triad_sonnet45.py --date-from 2019-05-01 --date-to 2019-05-31
+  # Use custom time window (e.g., 50-65 minutes from kick-off)
+  python football_60_triad.py --time-from 50 --time-to 65
   
-  # Process specific date range with custom input directory
-  python football_60_triad_sonnet45.py --input my_data --date-from 2019-01-01 --date-to 2019-12-31
+  # Process with custom input directory and time window
+  python football_60_triad.py --input my_data --time-from 45 --time-to 60
         """
     )
     
@@ -895,13 +843,17 @@ Examples:
     )
     
     parser.add_argument(
-        '--date-from',
-        help='Start date for processing (YYYY-MM-DD format). If not specified, process from beginning'
+        '--time-from',
+        type=int,
+        default=55,
+        help='Start of time window in minutes from kick-off (default: 55)'
     )
     
     parser.add_argument(
-        '--date-to',
-        help='End date for processing (YYYY-MM-DD format). If not specified, process until end'
+        '--time-to',
+        type=int,
+        default=60,
+        help='End of time window in minutes from kick-off (default: 60)'
     )
     
     parser.add_argument(
@@ -919,8 +871,8 @@ Examples:
     extractor = FootballTriadExtractor(
         input_dir=args.input,
         output_dir=args.output,
-        date_from=args.date_from,
-        date_to=args.date_to
+        time_from=args.time_from,
+        time_to=args.time_to
     )
     
     # Process all files
@@ -938,7 +890,6 @@ Examples:
     logger.info("Processing complete!")
     logger.info(f"Results written to: {output_csv}")
     logger.info(f"CSV files written to: {extractor.results_dir}")
-    logger.info(f"Log file: football_60_triad.log")
     logger.info("=" * 70)
 
 
