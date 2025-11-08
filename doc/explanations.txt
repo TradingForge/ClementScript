@@ -1,0 +1,158 @@
+After reviewing the sample files, I’d prefer to focus on in-play prices at half-time (football) rather than pre-match.
+
+Target
+
+- Market: Match Odds (1X2)
+- Price field: Last Traded Price (LTP)
+- Half-time proxy window: +55 to +60 minutes from the scheduled match start.
+
+Selection rule (synchronization required)
+
+- I only want to keep a snapshot if all three outcomes (1, X, 2) have an LTP timestamp with no more than 60 seconds between them.
+- For each match:
+1. Consider all LTPs within [+55; +60].
+2. Find a reference instant where the three runners each have an LTP within ≤60s of one another.
+
+-----------
+
+hi Clement , do you mean you want to filter olny matched which sollow these rules ? 
+and in I right understand you only interested in 5 minutes range to scan [+55; +60]?
+
+----------
+
+Yes
+For example this game started at 12H30
+Clement Kerrien removed this message
+In this case we have several valid timestamps within the [+55; +60] window (e.g., 13:25, 13:27, 13:29), each with one LTP per outcome.
+What I need is only one snapshot per match:
+
+- Pick the latest possible synchronized triad within the window.
+- “Synchronized” = the three outcomes (1, X, 2) each have an LTP with ≤60s between the three timestamps.
+- If there are multiple synchronized triads, take the one with the most recent timestamp (closest to +60:00).
+- If no synchronized triad exists, exclude the match.
+
+So in the example, please return only the 13:29 triad (three rows sharing the same snapshot_time_utc_ht).
+
+---------
+
+So the task is create such file with all games and all dates across all the history ? which sports and dates? only football? all leagues ? So need a script to pull out all the history , , unzip it and after that analyze .
+
+Candidate time Matching rows (within 60s window) Valid triad?
+13:25:06 58805 @13:25:06, 350594 @13:25:06, 13052998 @13:25:06 ✅ ✅ Triad #1
+13:26:06 58805 @13:25:06, 350594 @13:25:06, 13052998 @13:26:06 → all within 60s Triad #2
+13:27:03 58805 @13:27:03, closest 350594 @13:28:06 (+63s) ❌ ❌
+13:28:06 58805 @13:28:06, 350594 @13:28:06, 13052998 @13:28:06 ✅ ✅ Triad #3
+13:29:06 58805 @13:29:06, 350594 @13:29:06, 13052998 @13:29:06 ✅ ✅ Triad #4
+
+if I right understand the algo we have a few triads and we take just last one closest to 60m
+
+only one think one timestamp can be involved into a few rows but I believe this is ok
+
+--------
+
+Thanks — your understanding of the triads is correct. In your list, Triads #1, #2, #3 and #4 are valid, and we should keep only the last one (closest to +60:00) — i.e., Triad #4.
+
+And yes: one timestamp is used across three rows (one per outcome). That’s exactly what I want.
+
+To answer your scope questions and make this actionable:
+
+Scope (pilot → full run)
+- Sport: Football (soccer)
+- Leagues: All football leagues available in the Basic dataset (no filtering).
+- Dates (pilot): please start with one full month (e.g., 2019-05) to validate.
+- Dates (full run after validation): entire available history (from first available month in 2015 up to the latest complete month).
+
+Extraction rules (final):
+
+- Window: +55 to +60 minutes from the scheduled match start (use the event’s scheduled kickoff).
+- Find synchronized triads: (1, X, 2) each has an LTP within ≤60s of one another.
+- If multiple triads exist, select the latest within the window.
+
+If no synchronized triad exists in the [+55; +60] window, don’t exclude the match — keep the match row but leave the three half-time odds empty.
+
+Output format (TSV, one row per match):
+
+Header:
+Div Date Time HomeTeam AwayTeam Home result Away result Draw result Home odd HT Away odd HT Draw odd HT
+
+Rules:
+- Div: competition/country code (e.g., “BE”).
+- Date / Time: scheduled kick-off in UTC (YYYY-MM-DD / HH:MM).
+- Results: fill WINNER / LOSER (and DRAW where applicable) based on the final match result.
+- Half-time odds columns Home odd HT, Away odd HT, Draw odd HT):
+- If a synchronized triad exists, fill with the LTP for 1 / X / 2 from the latest valid triad within [+55; +60].
+- If no triad exists, leave these three cells empty for that match.
+
+
+---------------------------------------------
+
+
+Official Betfair Documentation for Your Data Format
+Main Resource:
+Exchange Stream API Documentation
+URL: https://betfair-developer-docs.atlassian.net/wiki/spaces/1smk3cen4v3lu3yomq5qye0ni/pages/2687396/Exchange%2BStream%2BAPI
+This documents the JSON format you're seeing in your files
+Key Documentation Sections:
+1. MarketDefinition Fields (Your Main Reference)
+Documents all fields in the marketDefinition object including:
+eventId, eventName, eventTypeId
+marketType, marketTime, settledTime
+countryCode, status, inPlay
+runners array with team/selection details
+All timestamp formats
+2. Message Format:
+Protocol: Each line is a JSON message terminated with CRLF (\r\n)
+Format: Newline-Delimited JSON (NDJSON)
+Message Types:
+"op":"mcm" = Market Change Message (what your files contain)
+"op":"ocm" = Order Change Message
+3. Key Fields Reference:
+Protocol: Each line is a JSON message terminated with CRLF (\r\n)
+Format: Newline-Delimited JSON (NDJSON)
+Message Types:
+"op":"mcm" = Market Change Message (what your files contain)
+"op":"ocm" = Order Change Message
+3. Key Fields Reference:
+Field	Type	Description
+op	string	Operation type ("mcm" = market change)
+clk	string	Clock value for ordering messages
+pt	long	Publish Time (Unix timestamp in milliseconds)
+mc	array	Market changes containing updates
+id	string	Market ID (e.g., "1.159461431")
+marketDefinition	object	Full market metadata (sent periodically)
+rc	array	Runner Changes with ltp (Last Traded Price)
+
+Additional Resources:
+GitHub Sample Code:
+https://github.com/betfair/stream-api-sample-code
+Contains Java, C#, and Node.js examples for parsing the format
+Betfairlightweight Python Library:
+Context7 ID: /betcode-org/betfair
+Python library for parsing Betfair historical data
+Would be useful if you want to process your files with Python
+Your Data Specifically:
+Your files are Historical Market Data in the Exchange Stream API format, compressed with bz2. The format is identical to the live streaming API, just saved to files for historical analysis.
+Key Fields You'll Need for Your Task (per doc/explanations.txt):
+pt → Timestamp (milliseconds)
+marketDefinition.marketTime → Scheduled match start
+marketDefinition.eventName → Team names
+marketDefinition.countryCode → Country/league
+rc[].ltp → Last Traded Price (odds)
+runners[].status → WINNER/LOSER/DRAW for results
+
+
+-------------------------------------------
+
+so based in  this information w hat I want to generate :
+1. I want to create a  script which generate result.csv for all games in football_data_output  directory
+format of the file  dscribed  avove in the document in section "Rules:". push  this file into  root.
+also I want to  accept  dates  from  to  scan .  if not  defined  scan  everything.
+
+2. all intermediate  steps of script  working have to  be logged  into .excel for  each game  like betfair_market_1.158255584_full (2).xlsx 
+with  a few  additional tabs which described in output_excel_file_format.txt so I can analyze it .
+try to create  such  script  .
+ask   if something not  clear 
+
+
+
+
