@@ -84,6 +84,8 @@ class FootballTriadExtractor:
         """Process a single match file and extract triad data"""
         try:
             market_definition = None
+            first_market_time_str = None
+            first_open_date_str = None
             runner_ltps = defaultdict(list)  # runner_id -> [(timestamp_ms, ltp), ...]
             match_odds_market_id = None
             
@@ -115,6 +117,10 @@ class FootballTriadExtractor:
                             # eventTypeId can be string or integer, '1' = football/soccer
                             event_type = str(md.get('eventTypeId', ''))
                             if md.get('marketType') == 'MATCH_ODDS' and event_type == '1':
+                                if first_market_time_str is None:
+                                    first_market_time_str = md.get('marketTime')
+                                if first_open_date_str is None:
+                                    first_open_date_str = md.get('openDate')
                                 market_definition = md
                                 match_odds_market_id = current_market_id
                         
@@ -138,7 +144,13 @@ class FootballTriadExtractor:
                 return None
             
             # Find triad
-            match_data = self._find_best_triad(market_definition, runner_ltps, match_odds_market_id)
+            match_data = self._find_best_triad(
+                market_definition,
+                runner_ltps,
+                match_odds_market_id,
+                scheduled_market_time_str=first_market_time_str,
+                scheduled_open_date_str=first_open_date_str,
+            )
             
             return match_data
             
@@ -147,12 +159,22 @@ class FootballTriadExtractor:
             self.errors += 1
             return None
     
-    def _find_best_triad(self, market_definition: Dict, runner_ltps: Dict, market_id: str) -> Dict:
+    def _find_best_triad(
+        self,
+        market_definition: Dict,
+        runner_ltps: Dict,
+        market_id: str,
+        *,
+        scheduled_market_time_str: Optional[str] = None,
+        scheduled_open_date_str: Optional[str] = None,
+    ) -> Dict:
         """Find the best synchronized triad in the +55 to +60 minute window"""
         
         # Extract match metadata
         runners = market_definition.get('runners', [])
-        market_time_str = market_definition.get('marketTime', '')
+        market_time_str = scheduled_market_time_str or market_definition.get('marketTime', '')
+        if not market_time_str:
+            market_time_str = scheduled_open_date_str or ''
         event_name = market_definition.get('eventName', 'Unknown')
         country_code = market_definition.get('countryCode', '')
         event_id = market_definition.get('eventId', '')
@@ -695,7 +717,7 @@ class FootballTriadExtractor:
                     f.write(f"  Status: {info.get('status', '')}\n")
                     f.write(f"  Sort Priority: {info.get('sort_priority', '')}\n")
                     f.write(f"\n")
-                
+
                 # Add triad information if available
                 triad = match_data.get('triad')
                 if triad:
@@ -777,6 +799,7 @@ class FootballTriadExtractor:
                 
                 for match in rows:
                     writer.writerow([
+                        match.get('market_id', ''),
                         match.get('div', ''),
                         match.get('date', ''),
                         match.get('time', ''),
@@ -799,6 +822,7 @@ class FootballTriadExtractor:
     def write_csv_output(self, results: List[Dict], output_dir: Path):
         """Write full results CSV and a triad-only CSV."""
         headers = [
+            'MarketId',
             'Div', 'Date', 'Time', 'HomeTeam', 'AwayTeam',
             'Home result', 'Away result', 'Draw result',
             'Home odd HT', 'Away odd HT', 'Draw odd HT'
