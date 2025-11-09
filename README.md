@@ -20,29 +20,32 @@ The script expects unpacked Betfair JSON data files in the `football_data_output
 
 ## Usage
 
-### Process all files with default 55-60 minute window
+### Configure settings
+
+Edit `settings.ini` (or another file passed via `--config`) with key=value pairs:
+
+```
+input=football_data_output
+output=.
+time_from=55
+time_to=60
+debug=N
+```
+
+Supported keys:
+- `input`: directory containing unpacked Betfair data
+- `output`: directory where result CSVs and debug artifacts (when enabled) will be written (defaults to current directory). Output filenames and directories include the time window, e.g. `result_55_60.csv`, `results_only_valid_triad_55_60.csv`, `football_data_results_55_60/`.
+- `time_from` / `time_to`: minutes from kick-off defining the processing window
+- `debug`: `Y/N`, `true/false`, etc. Controls whether auxiliary diagnostic files are generated
+
+### Run the extractor
 
 ```bash
+# Use default settings.ini
 python football_60_triad.py
-```
 
-### Use a custom time window (minutes from kick-off)
-
-```bash
-# Scan from +50 to +65 minutes
-python football_60_triad.py --time-from 50 --time-to 65
-```
-
-### Custom input directory
-
-```bash
-python football_60_triad.py --input my_data_folder
-```
-
-### Verbose logging
-
-```bash
-python football_60_triad.py --verbose
+# Use a custom settings file and verbose logging
+python football_60_triad.py --config my_settings.ini --verbose
 ```
 
 ## Output
@@ -62,18 +65,17 @@ Main output file (TSV format) containing one row per match with columns:
 - Away odd HT: Away odds in the selected window (empty if no triad)
 - Draw odd HT: Draw odds in the selected window (empty if no triad)
 
-### 2. Excel Analysis Files
+### 2. results_only_valid_triad.csv
 
-Detailed Excel files for each match in `football_data_results` with tabs:
-- **Market Info**: Match metadata and results
-- **All Ticks**: All LTP updates throughout the match
-- **Filtered Ticks**: LTPs within the configured time window
-- **Grouped Ticks**: Filtered ticks grouped by timestamp
-- **Selected Triad**: The selected synchronized triad (if found)
+Subset of matches where a synchronized triad was found and all three odds are populated.
 
-### 3. Timestamp-Converted JSON Files
+### 3. Debug artifacts (when `debug` setting is enabled)
 
-For every processed JSON input, a mirrored copy is written to `football_data_results` with the same directory structure and filename. All Unix millisecond timestamps (`pt`, `settledTime`, etc.) are replaced by human-readable UTC datetimes.
+Written to `football_data_results` using the input directory structure:
+- Selection tick CSVs (`*_selections.csv`, `*_selections_filtered.csv`)
+- Triad diagnostics (`*_triad.csv`)
+- Market metadata (`*_info`)
+- Timestamp-converted JSON copies (mirroring the original filenames)
 
 ## Algorithm
 
@@ -91,6 +93,5 @@ All log messages are written to the console. Redirect output to a file if you ne
 
 - Only football (eventTypeId = '1') Match Odds markets are processed
 - Markets must have exactly 3 runners (1X2)
-- The script preserves the directory structure from input to output for both Excel files and timestamp-converted JSON copies
-- Use the `--time-from` / `--time-to` flags to hone in on alternative match periods if needed
-
+- The script preserves the directory structure from input to output for all generated artifacts
+- Use the `--time-from` / `--time-to`

@@ -40,13 +40,15 @@ logger = logging.getLogger(__name__)
 class FootballTriadExtractor:
     """Main class for extracting synchronized triads from football match data"""
     
-    def __init__(self, input_dir: str, output_dir: str, time_from: int = 55, time_to: int = 60):
+    def __init__(self, input_dir: str, output_dir: str, time_from: int = 55, time_to: int = 60, debug: bool = False):
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         self.time_from = time_from  # Minutes from match start
         self.time_to = time_to      # Minutes from match start
-        self.results_dir = Path('football_data_results')
-        self.results_dir.mkdir(exist_ok=True)
+        self.debug = debug          # Controls generation of debug artifacts
+        self.results_dir = self.output_dir / f'football_data_results_{self.time_from}_{self.time_to}'
+        self.results_dir.mkdir(parents=True, exist_ok=True)
         
         # Statistics
         self.total_files = 0
@@ -729,6 +731,7 @@ class FootballTriadExtractor:
         self.total_files = len(all_files)
         logger.info(f"Found {self.total_files} files to process")
         logger.info(f"Time window: +{self.time_from} to +{self.time_to} minutes from kick-off")
+        logger.info(f"Debug artifacts enabled: {self.debug}")
         
         results = []
         
@@ -742,16 +745,17 @@ class FootballTriadExtractor:
                 results.append(match_data)
                 self.processed_files += 1
                 
-                # Create text file with timestamps
-                self.create_timestamp_text_file(match_data, file_path)
+                if self.debug:
+                    # Create text file with timestamps
+                    self.create_timestamp_text_file(match_data, file_path)
 
-                # Create selections CSV
-                self.create_selection_csv(match_data, file_path)
-                self.create_selection_filtered_csv(match_data, file_path)
-                self.create_triad_csv(match_data, file_path)
-                
-                # Create market info file
-                self.create_market_info_file(match_data, file_path)
+                    # Create selections CSVs and triad diagnostics
+                    self.create_selection_csv(match_data, file_path)
+                    self.create_selection_filtered_csv(match_data, file_path)
+                    self.create_triad_csv(match_data, file_path)
+                    
+                    # Create market info file
+                    self.create_market_info_file(match_data, file_path)
         
         logger.info(f"Processing complete: {self.processed_files} matches processed")
         logger.info(f"Matches with triads: {self.matches_with_triads}")
@@ -792,7 +796,7 @@ class FootballTriadExtractor:
             logger.error(f"Error writing CSV file '{file_path}': {e}")
             sys.exit(1)
 
-    def write_csv_output(self, results: List[Dict], output_file: str = 'result.csv'):
+    def write_csv_output(self, results: List[Dict], output_dir: Path):
         """Write full results CSV and a triad-only CSV."""
         headers = [
             'Div', 'Date', 'Time', 'HomeTeam', 'AwayTeam',
@@ -800,16 +804,52 @@ class FootballTriadExtractor:
             'Home odd HT', 'Away odd HT', 'Draw odd HT'
         ]
         
-        output_path = Path(output_file)
-        self._write_rows_to_csv(output_path, headers, results)
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        suffix = f"{self.time_from}_{self.time_to}"
+        result_path = output_dir / f"result_{suffix}.csv"
+        valid_output_path = output_dir / f"results_only_valid_triad_{suffix}.csv"
+        
+        self._write_rows_to_csv(result_path, headers, results)
         
         valid_results = [
             match for match in results
             if match.get('triad')
             and all(match.get(field) not in (None, '') for field in ['home_odd_ht', 'away_odd_ht', 'draw_odd_ht'])
         ]
-        valid_output_path = output_path.with_name('results_only_valid_triad.csv')
         self._write_rows_to_csv(valid_output_path, headers, valid_results)
+
+
+def _parse_bool(value: str) -> bool:
+    return value.strip().lower() in {'y', 'yes', 'true', '1', 'on'}
+
+
+def load_settings(config_path: str) -> Dict[str, str]:
+    """Load configuration key/value pairs from a simple settings file."""
+    path = Path(config_path)
+    if not path.exists():
+        logger.warning(f"Settings file '{config_path}' not found. Using defaults only.")
+        return {}
+
+    settings: Dict[str, str] = {}
+
+    with path.open('r', encoding='utf-8') as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line or line.startswith('#'):
+                continue
+
+            if '=' not in line:
+                logger.warning(f"Ignoring malformed settings line: '{line}'")
+                continue
+
+            key, value = line.split('=', 1)
+            key = key.strip().lower()
+            value = value.strip()
+            settings[key] = value
+
+    logger.info(f"Loaded settings from '{config_path}': {settings}")
+    return settings
 
 
 def main():
@@ -819,41 +859,18 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Process all files with default 55-60 minute window
+  # Process using default settings.ini
   python football_60_triad.py
   
-  # Use custom time window (e.g., 50-65 minutes from kick-off)
-  python football_60_triad.py --time-from 50 --time-to 65
-  
-  # Process with custom input directory and time window
-  python football_60_triad.py --input my_data --time-from 45 --time-to 60
+  # Specify a custom settings file
+  python football_60_triad.py --config my_settings.ini
         """
     )
     
     parser.add_argument(
-        '--input',
-        default='football_data_output',
-        help='Input directory containing unpacked Betfair data files (default: football_data_output)'
-    )
-    
-    parser.add_argument(
-        '--output',
-        default='.',
-        help='Output directory for result.csv (default: current directory)'
-    )
-    
-    parser.add_argument(
-        '--time-from',
-        type=int,
-        default=55,
-        help='Start of time window in minutes from kick-off (default: 55)'
-    )
-    
-    parser.add_argument(
-        '--time-to',
-        type=int,
-        default=60,
-        help='End of time window in minutes from kick-off (default: 60)'
+        '--config',
+        default='settings.ini',
+        help='Path to settings file (default: settings.ini)'
     )
     
     parser.add_argument(
@@ -867,12 +884,39 @@ Examples:
     if args.verbose:
         logger.setLevel(logging.DEBUG)
     
+    raw_settings = load_settings(args.config)
+
+    # Defaults
+    input_dir = raw_settings.get('input', raw_settings.get('input_dir', 'football_data_output')) or 'football_data_output'
+    output_dir = raw_settings.get('output', raw_settings.get('output_dir', '.')) or '.'
+
+    def _get_int(key: str, fallback: int) -> int:
+        value = raw_settings.get(key)
+        if value is None:
+            return fallback
+        try:
+            return int(value)
+        except ValueError:
+            logger.warning(f"Invalid integer for {key}: '{value}'. Using fallback {fallback}.")
+            return fallback
+
+    time_from = _get_int('time_from', 55)
+    time_to = _get_int('time_to', 60)
+
+    debug_value = raw_settings.get('debug', raw_settings.get('enable_debug', 'N'))
+    debug = _parse_bool(debug_value) if debug_value is not None else False
+
+    if time_from > time_to:
+        logger.warning(f"time_from ({time_from}) greater than time_to ({time_to}). Swapping values.")
+        time_from, time_to = time_to, time_from
+
     # Create extractor
     extractor = FootballTriadExtractor(
-        input_dir=args.input,
-        output_dir=args.output,
-        time_from=args.time_from,
-        time_to=args.time_to
+        input_dir=input_dir,
+        output_dir=output_dir,
+        time_from=time_from,
+        time_to=time_to,
+        debug=debug
     )
     
     # Process all files
@@ -883,13 +927,17 @@ Examples:
     results = extractor.process_all_files()
     
     # Write CSV output
-    output_csv = os.path.join(args.output, 'result.csv')
-    extractor.write_csv_output(results, output_csv)
+    extractor.write_csv_output(results, Path(output_dir))
+    
+    suffix = f"{time_from}_{time_to}"
+    result_path = Path(output_dir) / f"result_{suffix}.csv"
+    valid_path = Path(output_dir) / f"results_only_valid_triad_{suffix}.csv"
     
     logger.info("=" * 70)
     logger.info("Processing complete!")
-    logger.info(f"Results written to: {output_csv}")
-    logger.info(f"CSV files written to: {extractor.results_dir}")
+    logger.info(f"Results written to: {result_path}")
+    logger.info(f"Valid triads written to: {valid_path}")
+    logger.info(f"Debug/output directory: {extractor.results_dir}")
     logger.info("=" * 70)
 
 

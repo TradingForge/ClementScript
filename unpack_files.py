@@ -113,10 +113,10 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description='Unpack compressed files from input directory to output directory')
-    parser.add_argument('--input', default='football_data', 
-                        help='Input directory containing files to unpack (default: football_data)')
-    parser.add_argument('--output', default='football_data_output', 
-                        help='Output directory for unpacked files (default: football_data_output)')
+    parser.add_argument('--input', default='football_data_zip', 
+                        help='Input directory containing files to unpack (default: football_data_zip)')
+    parser.add_argument('--output', default='football_data', 
+                        help='Output directory for unpacked files (default: football_data)')
     
     args = parser.parse_args()
     
