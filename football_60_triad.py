@@ -56,6 +56,7 @@ class FootballTriadExtractor:
         self.matches_with_triads = 0
         self.matches_without_triads = 0
         self.errors = 0
+        self.aligned_count = 0  # Track how many times we aligned
         
     
     @staticmethod
@@ -79,6 +80,37 @@ class FootballTriadExtractor:
 
         dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
         return ts_ms, dt
+    
+    @staticmethod
+    def _align_market_time_to_5min(market_time_str: Optional[str]) -> Tuple[Optional[str], bool]:
+        """Align market time to nearest 5-minute interval.
+        
+        Rounds down to the nearest 5-minute mark (e.g., 18:01 -> 18:00, 18:07 -> 18:05).
+        
+        Returns:
+            Tuple of (aligned_time_str, was_aligned)
+            was_aligned is True if the time needed alignment
+        """
+        if not market_time_str:
+            return None, False
+        
+        try:
+            dt = datetime.strptime(market_time_str, '%Y-%m-%dT%H:%M:%S.%fZ')
+        except ValueError:
+            try:
+                dt = datetime.strptime(market_time_str, '%Y-%m-%dT%H:%M:%SZ')
+            except ValueError:
+                return market_time_str, False  # Return as-is if can't parse
+        
+        # Check if already aligned
+        already_aligned = (dt.minute % 5 == 0) and (dt.second == 0) and (dt.microsecond == 0)
+        
+        # Round down to nearest 5 minutes
+        aligned_minute = (dt.minute // 5) * 5
+        aligned_dt = dt.replace(minute=aligned_minute, second=0, microsecond=0)
+        
+        # Return in standard Betfair format
+        return aligned_dt.strftime('%Y-%m-%dT%H:%M:%S.000Z'), not already_aligned
     
     def process_match_file(self, file_path: Path) -> Optional[Dict]:
         """Process a single match file and extract triad data"""
@@ -143,12 +175,17 @@ class FootballTriadExtractor:
             if len(runners) != 3:
                 return None
             
+            # Align the first market time to 5-minute intervals
+            aligned_market_time_str, was_aligned = self._align_market_time_to_5min(first_market_time_str)
+            if was_aligned:
+                self.aligned_count += 1
+            
             # Find triad
             match_data = self._find_best_triad(
                 market_definition,
                 runner_ltps,
                 match_odds_market_id,
-                scheduled_market_time_str=first_market_time_str,
+                scheduled_market_time_str=aligned_market_time_str,
                 scheduled_open_date_str=first_open_date_str,
             )
             
@@ -191,10 +228,6 @@ class FootballTriadExtractor:
                 market_time = None
         
         # Determine winner/loser based on runner status
-        home_result = ''
-        away_result = ''
-        draw_result = ''
-        
         # Map runner IDs to names and determine home/draw/away
         runner_info = {}
         for idx, runner in enumerate(runners):
@@ -220,20 +253,17 @@ class FootballTriadExtractor:
             away_name = sorted_runners[2][1]['name']
             
             # Determine results
+            home_result = 'LOSER'
+            draw_result = 'LOSER'
+            away_result = 'LOSER'
             for runner_id, info in runner_info.items():
                 if info['status'] == 'WINNER':
                     if runner_id == home_runner_id:
                         home_result = 'WINNER'
-                        away_result = 'LOSER'
-                        draw_result = 'LOSER'
                     elif runner_id == draw_runner_id:
                         draw_result = 'WINNER'
-                        home_result = 'DRAW'
-                        away_result = 'DRAW'
                     elif runner_id == away_runner_id:
                         away_result = 'WINNER'
-                        home_result = 'LOSER'
-                        draw_result = 'LOSER'
         else:
             logger.warning(f"Expected 3 runners but found {len(sorted_runners)}")
             home_runner_id = list(runner_info.keys())[0] if len(runner_info) > 0 else None
@@ -242,6 +272,9 @@ class FootballTriadExtractor:
             home_name = event_name
             draw_name = 'Draw'
             away_name = ''
+            home_result = ''
+            draw_result = ''
+            away_result = ''
         
         # Parse team names from event name (typically "Team A v Team B")
         if ' v ' in event_name:
@@ -782,6 +815,7 @@ class FootballTriadExtractor:
         logger.info(f"Processing complete: {self.processed_files} matches processed")
         logger.info(f"Matches with triads: {self.matches_with_triads}")
         logger.info(f"Matches without triads: {self.matches_without_triads}")
+        logger.info(f"Market times aligned to 5 minutes: {self.aligned_count} out of {self.processed_files}")
         logger.info(f"Errors: {self.errors}")
         
         return results
