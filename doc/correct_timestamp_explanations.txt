@@ -1,0 +1,407 @@
+lets look  one game
+1.158303960,GB,2019-05-12,14:00,Burnley,Arsenal,LOSER,LOSER,WINNER,2.86,3.1,3.15
+
+in generated  reult  file and 7:40 PM 11/11/2025
+
+and  odd  file  here d:\proj\Clement\ClementScript\results\football_data_results_52_60\2019\May\12\29263064\
+
+first marketTime is 14:00
+match lasts  1.45  hour and  last  quote is  2019-05-12 18:53:18.604
+{"op": "mcm", "clk": "9299350447", "pt": "2019-05-12 18:53:18.604", "mc": [{"id": "1.158303960", "rc": [{"ltp": 160.0, "id": 58805}, {"ltp": 1.01, "id": 1096}]}]}
+
+so  this  file  has  wring marketTime,  in terms  of these  timestampl  match started   17:00
+It  is actually important  as I  find  triad  times based on  start time.
+so in this  file  triad  times  if  arounf 15.53...18.00
+
+so what  I want to  do , 
+
+1)  make  sure  we  right convert timestamps in utc  from inicial  to results files, no mistakes
+2) I need   detect  correct time  as marketTime does not  work in terms of timestamps  in this file
+for this example  it is 17:00 
+
+
+---
+
+what   write  my  customer:
+
+
+Clement Kerrien removed this message
+
+How did you obtain the new kick-off times that appear in the latest CSV?
+
+Please confirm:
+- Source(s): Betfair event metadata, or external websites (which ones)?
+- Method: automated script or manual lookup?
+
+I just opened the original Betfair file for market 1.158303960 (Burnley–Arsenal). 
+On the ticks sheet I can see a transaction at 2019-05-12 18:54:10. Because of that, the kick-off time can’t be 14:00 as written
+in your latest CSV — this would imply almost 5 hours between scheduled kick-off and the last trade in the Match Odds market.
+
+2 files 
+betfair_market_1.158303960_full.xlsx
+34 kB
+EXCEL_bPS8tr9LKb.png
+13 kB
+Given a football match lasts ~1h45–2h, the original Betfair file for 1.158303960 (Burnley–Arsenal) shows a last transaction at 18:54:13.
+
+
+
+That means the real scheduled kick-off in the Betfair data cannot be 14:00.
+ For this game it should be 17:00 (we know that for this game, the kick-off is set on the hour, XX:00, regardless of timezone).
+
+CK
+Clement Kerrien
+2:23 PM
+A football match lasts ~1h45–2h → the kick-off cannot be more than 2h45 before the last trade in Match Odds.
+
+Kick-offs are on fixed minutes (XX:00; sometimes XX:15/30/45).
+
+What we can do:
+Step 0 (first): find the official scheduled minute pattern for the match to know if it uses XX:00 only or XX:15 or XX:30 or XX:45.
+
+Then for each match:
+1. Take the last trade time.
+2. Go back 1h30.
+3. Snap down to the nearest allowed minute (XX:00 / 15 / 30 / 45) → that’s our kick-off.
+
+Example: last trade 18:54 →
+if only XX:00 allowed → kickoff 17:00
+if only XX:15 allowed → kickoff 17:15
+
+This is why I asked if you can fetch data online. The screenshot titled “Clarifying market start time…” made me think your tool can look 
+up the official scheduled kick-off on the web for each match.
+
+
+Irina Zaitseva
+2:40 PM
+in the initial time
+
+how i did this now:
+
+1.158303960 
+1.158303960
+109 kB
+a market Definition section which provide info for marketTIme
+
+fionly first marketDecinition update
+
+and it shows 14:00
+
+for now I operate only with historical files, not web, and I dont modify it
+
+I am trying to download events from Betfair now
+
+there are probably metadata for all games, let's check
+
+so first marketDefinition update in historical file gives 14:00
+
+image.png 
+image.png
+which match with real time
+
+CK
+Clement Kerrien
+2:46 PM
+Maybe the market définition in the file always give us the timing key (I don’t know how to call that)
+
+Maybe when we see the 14:00 as market definition we could know that the game would be on XX:00
+
+And looking at the last trade we could say that the start of the game is 17:00
+
+Irina Zaitseva
+2:48 PM
+I also check on some China league and it provided correct time which was XX:35
+
+CK
+Clement Kerrien
+2:48 PM
+Yes I know
+
+To find the game that had problems
+
+You should look at the first document that you sent me
+
+Irina Zaitseva
+2:49 PM
+last marketDefinition in that file was "status":"CLOSED","settledTime":"2019-05-12T15:54:57.000Z"
+
+which was 15:54
+
+CK
+Clement Kerrien
+2:49 PM
+I thought it was 14:00?
+
+Irina Zaitseva
+2:50 PM
+14:00 is first marketDefinition
+
+15:54 last marketDefintion
+
+first market definition provide kick off time
+
+I am downlaoding events reportisoty , let me recheck which info they provide for football
+
+CK
+Clement Kerrien
+2:52 PM
+OK so, can we use the "First market definition" the key that we need ?
+
+Irina Zaitseva
+2:52 PM
+yes, we can
+
+and I use this in my last script
+
+exactly first marketDefinitioon
+
+CK
+Clement Kerrien
+2:54 PM
+So the logic is :
+- Find the hour key thanks to market definition : 14:00 so key is XX:00
+- Find the last trade in the ticks section : It was something like 18:53
+
+
+
+So we go back 1h30 before snap down to the nearest allowed minute (XX:00 / 15 / 30 / 45) → that’s our kick-off.
+
+And we find 17:00 for the Arsenal Burnley game and we have the good half-time data between 17:52 and 18:00
+
+10/05/2019 Bohemians Dundalk
+
+
+
+Can you please check the First Market definition for this game?
+
+I want to check if for Arsenal Burnley it was not just "Luck" because the game always are available on a rounded hour
+
+Irina Zaitseva
+3:00 PM
+ok, I see your point , let me take a look at events files form bet fair first , probabyl there are some usefull info for us
+
+CK
+Clement Kerrien
+3:01 PM
+Let me know
+
+Irina Zaitseva
+3:02 PM
+look at their last marketDefinition update
+
+"pt": "2019-05-12 18:56:17.578", "mc": [{"id": "1.158303960", "marketDefinition": {"bspMarket": true, "turnInPlayEnabled": true, "persistenceEnabled": true, "marketBaseRate": 5.0, "eventId": "29263064", "eventTypeId": "1", "numberOfWinners": 1, "bettingType": "ODDS", "marketType": "MATCH_ODDS", "marketTime": "2019-05-12T14:44:00.000Z", "suspendTime": "2019-05-12T14:44:00.000Z", "bspReconciled": true, "complete": true, "inPlay": true, "crossMatching": false, "runnersVoidable": false, "numberOfActiveRunners": 0, "betDelay": 5, "status": "CLOSED", "settledTime": "2019-05-12T15:54:57.000Z", "runners": [{"status": "LOSER", "sortPriority": 1, "bsp": 2.56, "id": 56299, "name": "Burnley"}, {"status": "WINNER", "sortPriority": 2, "bsp": 2.92, "id": 1096, "name": "Arsenal"}, {"status": "LOSER", "sortPriority": 3, "bsp": 3.75, "id": 58805, "name": "The Draw"}], "regulators": ["MR_INT"], "countryCode": "GB", "discountAllowed": true, "timezone": "Europe/London", "openDate": "2019-05-12T14:44:00.000Z", "version": 27869236
+
+"pt": "2019-05-12 18:56:17.578", but , "status": "CLOSED", "settledTime": "2019-05-12T15:54:57.000Z"
+
+this looks strange
+
+so they just provide 3 hour gap in various timestamps
+
+CK
+Clement Kerrien
+3:03 PM
+Yes
+
+I know it is shit
+
+That is the problem
+
+2019-05-12 18:56:17
+
+
+
+But that is our last trade I guess
+
+Irina Zaitseva
+3:04 PM
+we probably can refer to this 2 timestampl to detect correct kick off time also
+
+I will back in 30 mins and continue, will check downloaded files
+
+CK
+Clement Kerrien
+3:04 PM
+But where did you found 14:00?
+
+It is not written in there
+
+Irina Zaitseva
+3:35 PM
+{"op": "mcm", "clk": "9213255321", "pt": "2019-04-30 20:26:17.678", "mc": [{"id": "1.158303960", "marketDefinition": {"bspMarket": false, "turnInPlayEnabled": true, "persistenceEnabled": true, "marketBaseRate": 5.0, "eventId": "29263064", "eventTypeId": "1", "numberOfWinners": 1, "bettingType": "ODDS", "marketType": "MATCH_ODDS", "marketTime": "2019-05-12T14:00:00.000Z", "suspendTime": "2019-05-12T14:00:00.000Z", "bspReconciled": false, "complete": true, "inPlay": false, "crossMatching": true, "runnersVoidable": false, "numberOfActiveRunners": 3, "betDelay": 0, "status": "OPEN", "runners": [{"status": "ACTIVE", "sortPriority": 1, "id": 56299, "name": "Burnley"}, {"status": "ACTIVE", "sortPriority": 2, "id": 1096, "name": "Arsenal"}, {"status": "ACTIVE", "sortPriority": 3, "id": 58805, "name": "The Draw"}], "regulators": ["MR_INT"], "countryCode": "GB", "discountAllowed": true, "timezone": "GMT", "openDate": "2019-05-12T14:00:00.000Z", "version": 2767336116, "name": "Match Odds", "eventName": "Burnley v Arsena
+
+this is first marketDefinition, I read kick off from this
+
+CK
+Clement Kerrien
+3:36 PM
+There is 2 files?
+
+For this game
+
+Even more maybe
+
+I think we could use it with this logic
+
+CK
+Clement Kerrien
+Nov 11, 2025 | 2:54 PM
+So the logic is :
+- Find the hour key thanks to market definition : 14:00 so key is XX:00
+- Find the last trade in the ticks section : It was something like 18:53
+
+
+
+So we go back 1h30 before snap down to the nearest allowed minute (XX:00 / 15 / 30 / 45) → that’s our kick-off.
+
+Show more
+Irina Zaitseva
+3:49 PM
+actually yes , we can , if you really need exact time
+
+because even if we take 14:00 we seems can find exact triad time
+
+but if you need exct match time we can apply your logic
+
+ohh
+
+stop
+
+CK
+Clement Kerrien
+3:50 PM
+Ahaha
+
+I am curious
+
+Irina Zaitseva
+3:50 PM
+if last ldd was 18:xx
+
+mean triad time is around 18 ?
+
+CK
+Clement Kerrien
+3:51 PM
+Yes
+
+It is what I mean there 🙂
+
+CK
+Clement Kerrien
+Nov 11, 2025 | 2:55 PM
+And we find 17:00 for the Arsenal Burnley game and we have the good half-time data between 17:52 and 18:00
+
+Irina Zaitseva
+3:51 PM
+ok, but
+
+are you sure last price update will be in the end of match ?
+
+I am not sure
+
+CK
+Clement Kerrien
+3:52 PM
+It is why I said 1H30 before it
+
+Irina Zaitseva
+3:52 PM
+I saw a game like barselona - liverpool in Champoine leagure where there are not many marrket updates , only pre-market history
+
+CK
+Clement Kerrien
+3:53 PM
+Can you send me the data?
+
+If you can make a screen shot besides of sending me the 1.156464654654 file
+
+Send me that but for the game that you mentionned
+
+Irina Zaitseva
+Nov 11, 2025 | 3:02 PM
+"pt": "2019-05-12 18:56:17.578", "mc": [{"id": "1.158303960", "marketDefinition": {"bspMarket": true, "turnInPlayEnabled": true, "persistenceEnabled": true, "marketBaseRate": 5.0, "eventId": "29263064", "eventTypeId": "1", "numberOfWinners": 1, "bettingType": "ODDS", "marketType": "MATCH_ODDS", "marketTime": "2019-05-12T14:44:00.000Z", "suspendTime": "2019-05-12T14:44:00.000Z", "bspReconciled": true, "complete": true, "inPlay": true, "crossMatching": false, "runnersVoidable": false, "numberOfActiveRunners": 0, "betDelay": 5, "status": "CLOSED", "settledTime": "2019-05-12T15:54:57.000Z", "runners": [{"status": "LOSER", "sortPriority": 1, "bsp": 2.56, "id": 56299, "name": "Burnley"}, {"status": "WINNER", "sortPriority": 2, "bsp": 2.92, "id": 1096, "name": "Arsenal"}, {"status": "LOSER", "sortPriority": 3, "bsp": 3.75, "id": 58805, "name": "The Draw"}], "regulators": ["MR_INT"], "countryCode": "GB", "discountAllowed": true, "timezone": "Europe/London", "openDate": "2019-05-12T14:44:00.000Z", "version": 27869236
+
+Show more
+Irina Zaitseva
+3:58 PM
+1.157733812 
+1.157733812
+247 kB
+this is bars - liverp
+
+CK
+Clement Kerrien
+4:00 PM
+Clement Kerrien removed this message
+
+Clement Kerrien removed this message
+
+Irina Zaitseva
+4:10 PM
+29263064 
+29263064
+2 MB
+CK
+Clement Kerrien
+4:10 PM
+EXCEL_X0BVeqobQO.png 
+EXCEL_X0BVeqobQO.png
+For this game
+
+Irina Zaitseva
+4:10 PM
+this is event file for the Bernley - Arrsenal
+
+CK
+Clement Kerrien
+4:10 PM
+Last trade at 23:44
+
+Irina Zaitseva
+4:11 PM
+a lot of info but most which market it supports , check this
+
+CK
+Clement Kerrien
+4:11 PM
+That mean, we go 1H30 before and look at the XX:00 key
+
+So that mean that, for this game, in this file, the starting time is 22:00
+
+I can't read the last files that you sent me
+
+Irina Zaitseva
+Nov 11, 2025 | 4:10 PM
+this is event file for the Bernley - Arrsenal
+
+Can you send it to me in CSV?
+
+Irina Zaitseva
+4:14 PM
+this is raw file form their site, it have not transformed it , you or me can ask GPT translate it somehow more readable format
+
+ok, check this fille, if nothing interested I will implement the way you suggested
+
+Irina Zaitseva
+4:25 PM
+it coitains too many various info to convert it to CSV , but this is most about markets , which market does it support, which results etc
+
+so do you want me implement this as you suggested?
+
+CK
+Clement Kerrien
+4:30 PM
+Ok, there is stuff I could be interested by (other market) but clearly, it is not he priority right now
+
+For now we need to focus on 1X2 market
+
+Having the good starting hour
+
+Yes please, let's try with the logic that I explained
+
+Irina Zaitseva
+Nov 11, 2025 | 4:25 PM
+so do you want me implement this as you suggested?
+
+
+
