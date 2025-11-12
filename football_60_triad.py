@@ -353,42 +353,34 @@ class FootballTriadExtractor:
                                f"last_price={last_price_time.strftime('%Y-%m-%d %H:%M:%S')}, "
                                f"duration={match_duration_hours:.2f}h")
                     
-                    # Logic: Only apply correction if match duration >= 2.25 hours (2h 15min)
-                    if match_duration_hours >= 2.25:
-                        logger.info(f"Match duration {match_duration_hours:.2f}h >= 2h15m, applying kick-off correction for {match_odds_market_id}")
-                        
-                        corrected_kickoff_time, original_market_time, minute_pattern = calculate_correct_kickoff(
-                            first_market_time_str,
-                            last_price_timestamp_ms
-                        )
-                        
-                        if corrected_kickoff_time and original_market_time:
-                            time_diff = (corrected_kickoff_time - original_market_time).total_seconds() / 3600
-                            logger.debug(f"Correction calculated: {original_market_time.strftime('%H:%M')} -> "
-                                       f"{corrected_kickoff_time.strftime('%H:%M')} "
-                                       f"(diff: {time_diff:.2f}h)")
-                            if abs(time_diff) > 0.01:  # More than ~30 seconds difference
-                                kickoff_was_corrected = True
-                                self.kickoff_corrected_count += 1
-                                logger.info(f"Kickoff corrected for {match_odds_market_id}: "
-                                           f"{original_market_time.strftime('%Y-%m-%d %H:%M')} -> "
-                                           f"{corrected_kickoff_time.strftime('%Y-%m-%d %H:%M')} "
-                                           f"(pattern: XX:{minute_pattern:02d}, diff: {time_diff:.2f}h)")
-                                
-                                # Track this correction for the CSV report
-                                self.corrected_matches.append({
-                                    'market_id': match_odds_market_id,
-                                    'original_time': original_market_time.strftime('%Y-%m-%d %H:%M:%S'),
-                                    'corrected_time': corrected_kickoff_time.strftime('%Y-%m-%d %H:%M:%S'),
-                                    'time_diff_hours': time_diff,
-                                    'match_duration_hours': match_duration_hours,
-                                    'minute_pattern': minute_pattern,
-                                })
-                    else:
-                        logger.debug(f"Match duration {match_duration_hours:.2f}h < 2h15m, using original marketTime for {match_odds_market_id}")
-                        # Extract minute pattern for metadata even if not correcting
-                        minute_pattern = extract_minute_pattern(first_market_time_str)
-                        original_market_time = original_market_time_parsed
+                    # Apply kick-off correction logic to ALL games
+                    corrected_kickoff_time, original_market_time, minute_pattern = calculate_correct_kickoff(
+                        first_market_time_str,
+                        last_price_timestamp_ms
+                    )
+                    
+                    if corrected_kickoff_time and original_market_time:
+                        time_diff = (corrected_kickoff_time - original_market_time).total_seconds() / 3600
+                        logger.debug(f"Correction calculated: {original_market_time.strftime('%H:%M')} -> "
+                                   f"{corrected_kickoff_time.strftime('%H:%M')} "
+                                   f"(diff: {time_diff:.2f}h)")
+                        if abs(time_diff) > 0.01:  # More than ~30 seconds difference
+                            kickoff_was_corrected = True
+                            self.kickoff_corrected_count += 1
+                            logger.info(f"Kickoff corrected for {match_odds_market_id}: "
+                                       f"{original_market_time.strftime('%Y-%m-%d %H:%M')} -> "
+                                       f"{corrected_kickoff_time.strftime('%Y-%m-%d %H:%M')} "
+                                       f"(pattern: XX:{minute_pattern:02d}, diff: {time_diff:.2f}h)")
+                            
+                            # Track this correction for the CSV report
+                            self.corrected_matches.append({
+                                'market_id': match_odds_market_id,
+                                'original_time': original_market_time.strftime('%Y-%m-%d %H:%M:%S'),
+                                'corrected_time': corrected_kickoff_time.strftime('%Y-%m-%d %H:%M:%S'),
+                                'time_diff_hours': time_diff,
+                                'match_duration_hours': match_duration_hours,
+                                'minute_pattern': minute_pattern,
+                            })
             
             # Use corrected kickoff if available, otherwise use original market time
             if corrected_kickoff_time:
@@ -1082,7 +1074,7 @@ class FootballTriadExtractor:
         logger.info(f"Processing complete: {self.processed_files} matches processed")
         logger.info(f"Matches with triads: {self.matches_with_triads}")
         logger.info(f"Matches without triads: {self.matches_without_triads}")
-        logger.info(f"Kick-off times corrected: {self.kickoff_corrected_count} out of {self.processed_files}")
+        logger.info(f"Games with timestamp mismatch (kick-off corrected): {self.kickoff_corrected_count} out of {self.processed_files}")
         logger.info(f"Market times aligned to 5 minutes (fallback): {self.aligned_count}")
         logger.info(f"Errors: {self.errors}")
         
@@ -1098,7 +1090,7 @@ class FootballTriadExtractor:
             headers = [
                 'MarketId', 'Div', 'DateTime', 'HomeTeam', 'AwayTeam',
                 'Home result', 'Away result', 'Draw result',
-                'Home odd HT', 'Away odd HT', 'Draw odd HT'
+                'Home odd HT', 'Away odd HT', 'Draw odd HT', 'KickOff_2_15_offset'
             ]
             
             with open(file_path, 'w', newline='', encoding='utf-8') as f:
@@ -1110,6 +1102,10 @@ class FootballTriadExtractor:
                     date_str = match.get('date', '')
                     time_str = match.get('time', '')
                     datetime_str = f"{date_str} {time_str}" if date_str and time_str else ''
+                    
+                    # KickOff_2_15_offset: Y if match duration > 2h 15min
+                    match_duration = match.get('match_duration_hours')
+                    kickoff_2_15 = 'Y' if match_duration and match_duration > 2.25 else 'N'
                     
                     writer.writerow([
                         match.get('market_id', ''),
@@ -1123,6 +1119,7 @@ class FootballTriadExtractor:
                         match.get('home_odd_ht', ''),
                         match.get('away_odd_ht', ''),
                         match.get('draw_odd_ht', ''),
+                        kickoff_2_15,
                     ])
             
             logger.info(f"Successfully wrote {len(rows)} matches to {file_path}")
@@ -1140,7 +1137,7 @@ class FootballTriadExtractor:
         try:
             headers = [
                 'MarketId', 'Div', 'correctedDateTime', 'definitionDateTime', 
-                'lastODDDateTime', 'lastTriadDateTime', 'Kickoff Correction Applied',
+                'lastODDDateTime', 'lastTriadDateTime', 'KickOff_2_15_offset',
                 'HomeTeam', 'AwayTeam', 'Home result', 'Away result', 'Draw result',
                 'Home odd HT', 'Away odd HT', 'Draw odd HT'
             ]
@@ -1185,8 +1182,9 @@ class FootballTriadExtractor:
                     else:
                         last_triad_datetime = '0000-00-00 00:00'
                     
-                    # Kickoff correction applied (Y/N)
-                    kickoff_correction = 'Y' if match.get('kickoff_corrected', False) else 'N'
+                    # KickOff_2_15_offset: Y if match duration > 2h 15min
+                    match_duration = match.get('match_duration_hours')
+                    kickoff_2_15 = 'Y' if match_duration and match_duration > 2.25 else 'N'
                     
                     writer.writerow([
                         match.get('market_id', ''),
@@ -1195,7 +1193,7 @@ class FootballTriadExtractor:
                         definition_datetime,
                         last_odd_datetime,
                         last_triad_datetime,
-                        kickoff_correction,
+                        kickoff_2_15,
                         match.get('home_team', ''),
                         match.get('away_team', ''),
                         match.get('home_result', ''),
