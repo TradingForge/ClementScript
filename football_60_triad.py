@@ -325,6 +325,15 @@ class FootballTriadExtractor:
             kickoff_was_corrected = False
             match_duration_hours = None
             
+            # Always parse and save the original market time from first marketDefinition
+            if first_market_time_str:
+                for fmt in ['%Y-%m-%dT%H:%M:%S.%fZ', '%Y-%m-%dT%H:%M:%SZ']:
+                    try:
+                        original_market_time = datetime.strptime(first_market_time_str, fmt)
+                        break
+                    except ValueError:
+                        continue
+            
             if first_market_time_str and last_price_timestamp_ms:
                 # Parse market time
                 original_market_time_parsed = None
@@ -344,9 +353,9 @@ class FootballTriadExtractor:
                                f"last_price={last_price_time.strftime('%Y-%m-%d %H:%M:%S')}, "
                                f"duration={match_duration_hours:.2f}h")
                     
-                    # Logic: Only apply correction if match duration >= 2 hours
-                    if match_duration_hours >= 2.0:
-                        logger.info(f"Match duration {match_duration_hours:.2f}h >= 2h, applying kick-off correction for {match_odds_market_id}")
+                    # Logic: Only apply correction if match duration >= 2.25 hours (2h 15min)
+                    if match_duration_hours >= 2.25:
+                        logger.info(f"Match duration {match_duration_hours:.2f}h >= 2h15m, applying kick-off correction for {match_odds_market_id}")
                         
                         corrected_kickoff_time, original_market_time, minute_pattern = calculate_correct_kickoff(
                             first_market_time_str,
@@ -376,7 +385,7 @@ class FootballTriadExtractor:
                                     'minute_pattern': minute_pattern,
                                 })
                     else:
-                        logger.debug(f"Match duration {match_duration_hours:.2f}h < 2h, using original marketTime for {match_odds_market_id}")
+                        logger.debug(f"Match duration {match_duration_hours:.2f}h < 2h15m, using original marketTime for {match_odds_market_id}")
                         # Extract minute pattern for metadata even if not correcting
                         minute_pattern = extract_minute_pattern(first_market_time_str)
                         original_market_time = original_market_time_parsed
@@ -1079,23 +1088,114 @@ class FootballTriadExtractor:
         
         return results
     
-    def _write_rows_to_csv(self, file_path: Path, headers: List[str], rows: List[Dict]):
-        """Helper to write a list of match dictionaries to CSV."""
+    def _write_simple_csv(self, file_path: Path, rows: List[Dict]):
+        """Write simple CSV with basic match information."""
         file_path = Path(file_path)
         file_path.parent.mkdir(parents=True, exist_ok=True)
         logger.info(f"Writing results to {file_path}")
         
         try:
+            headers = [
+                'MarketId', 'Div', 'DateTime', 'HomeTeam', 'AwayTeam',
+                'Home result', 'Away result', 'Draw result',
+                'Home odd HT', 'Away odd HT', 'Draw odd HT'
+            ]
+            
             with open(file_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
                 writer.writerow(headers)
                 
                 for match in rows:
+                    # Combine date and time into DateTime format: "2019-06-01 14:00"
+                    date_str = match.get('date', '')
+                    time_str = match.get('time', '')
+                    datetime_str = f"{date_str} {time_str}" if date_str and time_str else ''
+                    
                     writer.writerow([
                         match.get('market_id', ''),
                         match.get('div', ''),
-                        match.get('date', ''),
-                        match.get('time', ''),
+                        datetime_str,
+                        match.get('home_team', ''),
+                        match.get('away_team', ''),
+                        match.get('home_result', ''),
+                        match.get('away_result', ''),
+                        match.get('draw_result', ''),
+                        match.get('home_odd_ht', ''),
+                        match.get('away_odd_ht', ''),
+                        match.get('draw_odd_ht', ''),
+                    ])
+            
+            logger.info(f"Successfully wrote {len(rows)} matches to {file_path}")
+        
+        except Exception as e:
+            logger.error(f"Error writing CSV file '{file_path}': {e}")
+            sys.exit(1)
+    
+    def _write_extended_csv(self, file_path: Path, rows: List[Dict]):
+        """Write extended CSV with detailed timing information."""
+        file_path = Path(file_path)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Writing extended results to {file_path}")
+        
+        try:
+            headers = [
+                'MarketId', 'Div', 'correctedDateTime', 'definitionDateTime', 
+                'lastODDDateTime', 'lastTriadDateTime', 'Kickoff Correction Applied',
+                'HomeTeam', 'AwayTeam', 'Home result', 'Away result', 'Draw result',
+                'Home odd HT', 'Away odd HT', 'Draw odd HT'
+            ]
+            
+            with open(file_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(headers)
+                
+                for match in rows:
+                    # correctedDateTime: The kick-off time used (format: "2019-06-01 14:00")
+                    date_str = match.get('date', '')
+                    time_str = match.get('time', '')
+                    corrected_datetime = f"{date_str} {time_str}" if date_str and time_str else ''
+                    
+                    # definitionDateTime: Raw marketTime from first marketDefinition
+                    definition_datetime = match.get('original_market_time', '')
+                    if definition_datetime:
+                        # Format to "2019-06-01 14:00" (remove seconds if present)
+                        try:
+                            dt = datetime.strptime(definition_datetime, '%Y-%m-%d %H:%M:%S')
+                            definition_datetime = dt.strftime('%Y-%m-%d %H:%M')
+                        except Exception:
+                            pass
+                    
+                    # lastODDDateTime: Time from last odd update
+                    last_odd_datetime = match.get('last_price_update_time', '')
+                    if last_odd_datetime:
+                        # Format to "2019-06-01 14:00" (remove seconds if present)
+                        try:
+                            dt = datetime.strptime(last_odd_datetime, '%Y-%m-%d %H:%M:%S')
+                            last_odd_datetime = dt.strftime('%Y-%m-%d %H:%M')
+                        except Exception:
+                            pass
+                    
+                    # lastTriadDateTime: Last triad time
+                    triad_timestamp = match.get('triad_timestamp')
+                    if triad_timestamp:
+                        try:
+                            last_triad_datetime = triad_timestamp.strftime('%Y-%m-%d %H:%M')
+                        except Exception:
+                            last_triad_datetime = '0000-00-00 00:00'
+                    else:
+                        last_triad_datetime = '0000-00-00 00:00'
+                    
+                    # Kickoff correction applied (Y/N)
+                    kickoff_correction = 'Y' if match.get('kickoff_corrected', False) else 'N'
+                    
+                    writer.writerow([
+                        match.get('market_id', ''),
+                        match.get('div', ''),
+                        corrected_datetime,
+                        definition_datetime,
+                        last_odd_datetime,
+                        last_triad_datetime,
+                        kickoff_correction,
                         match.get('home_team', ''),
                         match.get('away_team', ''),
                         match.get('home_result', ''),
@@ -1113,81 +1213,19 @@ class FootballTriadExtractor:
             sys.exit(1)
 
     def write_csv_output(self, results: List[Dict], output_dir: Path):
-        """Write full results CSV and a triad-only CSV."""
-        headers = [
-            'MarketId',
-            'Div', 'Date', 'Time', 'HomeTeam', 'AwayTeam',
-            'Home result', 'Away result', 'Draw result',
-            'Home odd HT', 'Away odd HT', 'Draw odd HT'
-        ]
-        
+        """Write simple and extended CSV files."""
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         suffix = f"{self.time_from}_{self.time_to}"
+        
+        # Write simple CSV
         result_path = output_dir / f"result_{suffix}.csv"
-        valid_output_path = output_dir / f"results_only_valid_triad_{suffix}.csv"
+        self._write_simple_csv(result_path, results)
         
-        self._write_rows_to_csv(result_path, headers, results)
-        
-        valid_results = [
-            match for match in results
-            if match.get('triad')
-            and all(match.get(field) not in (None, '') for field in ['home_odd_ht', 'away_odd_ht', 'draw_odd_ht'])
-        ]
-        self._write_rows_to_csv(valid_output_path, headers, valid_results)
+        # Write extended CSV
+        extended_path = output_dir / f"result_{suffix}_extended.csv"
+        self._write_extended_csv(extended_path, results)
     
-    def write_kickoff_correction_csv(self, results: List[Dict], output_dir: Path):
-        """Write CSV of matches where kick-off correction was applied."""
-        try:
-            output_dir = Path(output_dir)
-            output_dir.mkdir(parents=True, exist_ok=True)
-            output_file = output_dir / "kickoff_correction_logic_data.csv"
-            
-            # Filter matches where correction was applied
-            corrected_matches = [
-                match for match in results
-                if match.get('kickoff_corrected', False)
-            ]
-            
-            if not corrected_matches:
-                logger.info("No matches required kick-off correction")
-                return
-            
-            headers = [
-                'market_id',
-                'event_id',
-                'team1',
-                'team2',
-                'original_market_time',
-                'corrected_start_time',
-                'match_duration_hours',
-                'minute_pattern',
-                'country_code',
-            ]
-            
-            with open(output_file, 'w', newline='', encoding='utf-8') as csvfile:
-                writer = csv.writer(csvfile)
-                writer.writerow(headers)
-                
-                for match in corrected_matches:
-                    row = [
-                        match.get('market_id', ''),
-                        match.get('event_id', ''),
-                        match.get('home_team', ''),
-                        match.get('away_team', ''),
-                        match.get('original_market_time', ''),
-                        f"{match.get('date', '')} {match.get('time', '')}",
-                        match.get('match_duration_hours', ''),
-                        match.get('minute_pattern', ''),
-                        match.get('div', ''),
-                    ]
-                    writer.writerow(row)
-            
-            logger.info(f"Kick-off correction data written to: {output_file}")
-            logger.info(f"Total matches with correction applied: {len(corrected_matches)}")
-            
-        except Exception as e:
-            logger.error(f"Error writing kick-off correction CSV: {e}", exc_info=True)
 
 
 def _parse_bool(value: str) -> bool:
@@ -1299,20 +1337,14 @@ Examples:
     # Write CSV output
     extractor.write_csv_output(results, Path(output_dir))
     
-    # Write kick-off correction data
-    extractor.write_kickoff_correction_csv(results, Path(output_dir))
-    
     suffix = f"{time_from}_{time_to}"
     result_path = Path(output_dir) / f"result_{suffix}.csv"
-    valid_path = Path(output_dir) / f"results_only_valid_triad_{suffix}.csv"
-    kickoff_correction_path = Path(output_dir) / "kickoff_correction_logic_data.csv"
+    extended_path = Path(output_dir) / f"result_{suffix}_extended.csv"
     
     logger.info("=" * 70)
     logger.info("Processing complete!")
-    logger.info(f"Results written to: {result_path}")
-    logger.info(f"Valid triads written to: {valid_path}")
-    if kickoff_correction_path.exists():
-        logger.info(f"Kick-off correction data: {kickoff_correction_path}")
+    logger.info(f"Simple results written to: {result_path}")
+    logger.info(f"Extended results written to: {extended_path}")
     logger.info(f"Debug/output directory: {extractor.results_dir}")
     logger.info("=" * 70)
 
