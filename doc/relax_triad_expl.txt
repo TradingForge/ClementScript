@@ -38,3 +38,8 @@ relaxed_window_secs=180
 
 use them  for  relax triad
 
+
+-------------------------
+
+MarketId,Div,correctedDateTime,definitionDateTime,lastODDDateTime,lastTickDateTime,lastTriadDateTime,KickOff_2_30_lastodd,KickOff_2_30_lasttick,ht_selection_method,total_ltp_updates,HomeTeam,AwayTeam,Home result,Away result,Draw result,Home odd HT,Away odd HT,Draw odd HT
+

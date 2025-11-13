@@ -4,15 +4,21 @@ Football Half-Time Odds Triad Extractor
 
 This script processes Betfair historical JSON data files to extract synchronized
 half-time odds for football matches. It finds "triads" where all three outcomes
-(Home, Draw, Away) have Last Traded Prices (LTP) within 60 seconds of each other
-in the +55 to +60 minute window from kick-off.
+(Home, Draw, Away) have Last Traded Prices (LTP) synchronized within a time window.
+
+Two-Phase Triad Selection:
+1. Exact triad (primary): Window +52 to +60 minutes, max 60s between 1/X/2, picks latest
+2. Relaxed triad (fallback): Window +54 to +60 minutes, max 180s between 1/X/2,
+   picks smallest gap then closest to +60:00
 
 Output:
 - result.csv: Main output file with one row per match
 - Excel files: Detailed analysis files in football_data_results directory
+- ht_selection_method column: 'exact', 'relaxed', or 'none'
 
 Author: Generated for Clement
 Date: 2025-11-06
+Updated: 2025-11-13 (Added relaxed triad fallback)
 """
 
 import os
@@ -155,12 +161,18 @@ def calculate_correct_kickoff(
 class FootballTriadExtractor:
     """Main class for extracting synchronized triads from football match data"""
     
-    def __init__(self, input_dir: str, output_dir: str, time_from: int = 55, time_to: int = 60, debug: bool = False):
+    def __init__(self, input_dir: str, output_dir: str, time_from: int = 55, time_to: int = 60, 
+                 window_secs: int = 60, relaxed_time_from: int = 54, relaxed_time_to: int = 60, 
+                 relaxed_window_secs: int = 180, debug: bool = False):
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.time_from = time_from  # Minutes from match start
-        self.time_to = time_to      # Minutes from match start
+        self.time_from = time_from  # Minutes from match start (exact triad)
+        self.time_to = time_to      # Minutes from match start (exact triad)
+        self.window_secs = window_secs  # Max seconds between 1/X/2 for exact triad
+        self.relaxed_time_from = relaxed_time_from  # Minutes from match start (relaxed triad)
+        self.relaxed_time_to = relaxed_time_to      # Minutes from match start (relaxed triad)
+        self.relaxed_window_secs = relaxed_window_secs  # Max seconds between 1/X/2 for relaxed triad
         self.debug = debug          # Controls generation of debug artifacts
         self.results_dir = self.output_dir / f'football_data_results_{self.time_from}_{self.time_to}'
         self.results_dir.mkdir(parents=True, exist_ok=True)
@@ -170,6 +182,8 @@ class FootballTriadExtractor:
         self.processed_files = 0
         self.matches_with_triads = 0
         self.matches_without_triads = 0
+        self.matches_with_exact_triads = 0
+        self.matches_with_relaxed_triads = 0
         self.errors = 0
         self.aligned_count = 0  # Track how many times we aligned
         self.kickoff_corrected_count = 0  # Track how many times kickoff was corrected
@@ -456,6 +470,97 @@ class FootballTriadExtractor:
             self.errors += 1
             return None
     
+    def _find_triads_in_window(
+        self,
+        runner_ltps: Dict,
+        home_runner_id: int,
+        draw_runner_id: int,
+        away_runner_id: int,
+        runner_info: Dict,
+        window_start_ms: int,
+        window_end_ms: int,
+        max_gap_ms: int,
+    ) -> List[Dict]:
+        """
+        Find all triads in a given window with a maximum gap between odds.
+        
+        Returns a list of triad candidates with their metadata.
+        """
+        triad_candidates = []
+        
+        # Collect all ticks within the window
+        window_ticks = []
+        for runner_id, ltps in runner_ltps.items():
+            for timestamp_ms, ltp in ltps:
+                if window_start_ms <= timestamp_ms <= window_end_ms:
+                    window_ticks.append({
+                        'timestamp_ms': timestamp_ms,
+                        'runner_id': runner_id,
+                        'ltp': ltp
+                    })
+        
+        window_ticks.sort(key=lambda x: x['timestamp_ms'])
+        timestamps = sorted(set(tick['timestamp_ms'] for tick in window_ticks))
+        
+        # For each timestamp, try to find a triad where all 3 runners have LTPs within max_gap_ms
+        for candidate_ts in timestamps:
+            # Find closest LTP for each runner relative to candidate_ts
+            runner_ltps_at_ts = {}
+            
+            for runner_id in [home_runner_id, draw_runner_id, away_runner_id]:
+                if runner_id not in runner_ltps:
+                    continue
+                
+                # Get the most recent LTP for this runner at or before candidate_ts
+                # that is within the window and within max_gap_ms of candidate_ts
+                closest_ltp = None
+                closest_ts = None
+                
+                for ts, ltp in runner_ltps[runner_id]:
+                    if ts <= candidate_ts and window_start_ms <= ts <= window_end_ms:
+                        time_diff = abs(candidate_ts - ts) / 1000  # in seconds
+                        if time_diff <= max_gap_ms / 1000:
+                            if closest_ts is None or ts > closest_ts:
+                                closest_ts = ts
+                                closest_ltp = ltp
+                
+                if closest_ltp is not None:
+                    runner_ltps_at_ts[runner_id] = (closest_ts, closest_ltp)
+            
+            # Check if we have all 3 runners
+            if len(runner_ltps_at_ts) == 3:
+                # Check if all timestamps are within max_gap_ms of each other
+                timestamps_list = [ts for ts, ltp in runner_ltps_at_ts.values()]
+                max_diff = max(timestamps_list) - min(timestamps_list)
+                
+                if max_diff <= max_gap_ms:
+                    entries = []
+                    for role, runner_id in [
+                        ('home', home_runner_id),
+                        ('draw', draw_runner_id),
+                        ('away', away_runner_id),
+                    ]:
+                        runner_ts, runner_ltp = runner_ltps_at_ts.get(runner_id, (None, None))
+                        if runner_id is None or runner_ts is None:
+                            continue
+                        runner_details = runner_info.get(runner_id, {})
+                        entries.append({
+                            'role': role,
+                            'runner_id': runner_id,
+                            'runner_name': runner_details.get('name', ''),
+                            'timestamp_ms': runner_ts,
+                            'ltp': runner_ltp,
+                        })
+                    
+                    if len(entries) == 3:
+                        triad_candidates.append({
+                            'snapshot_timestamp_ms': candidate_ts,
+                            'max_time_diff_ms': max_diff,
+                            'entries': entries,
+                        })
+        
+        return triad_candidates
+    
     def _find_best_triad(
         self,
         market_definition: Dict,
@@ -465,7 +570,11 @@ class FootballTriadExtractor:
         scheduled_market_time_str: Optional[str] = None,
         scheduled_open_date_str: Optional[str] = None,
     ) -> Dict:
-        """Find the best synchronized triad in the +55 to +60 minute window"""
+        """
+        Find the best synchronized triad using a two-phase approach:
+        1. Exact triad: window [time_from, time_to], max gap window_secs
+        2. Relaxed triad (fallback): window [relaxed_time_from, relaxed_time_to], max gap relaxed_window_secs
+        """
         
         # Extract match metadata
         runners = market_definition.get('runners', [])
@@ -545,22 +654,17 @@ class FootballTriadExtractor:
             home_team = event_name
             away_team = ''
         
-        # Find triads in +55 to +60 minute window
+        # Initialize triad search variables
         triad = None
         triad_timestamp = None
         triad_candidates = []
         all_ticks = []
         filtered_ticks = []
+        ht_selection_method = 'none'
         
         if market_time:
             # market_time_str comes from corrected kickoff which is already in UTC format
             market_time_utc = market_time.replace(tzinfo=timezone.utc)
-            
-            # Calculate window in UTC
-            window_start_utc = market_time_utc + timedelta(minutes=self.time_from)
-            window_end_utc = market_time_utc + timedelta(minutes=self.time_to)
-            window_start_ms = int(window_start_utc.timestamp() * 1000)
-            window_end_ms = int(window_end_utc.timestamp() * 1000)
             
             # Collect all ticks for each runner
             for runner_id, ltps in runner_ltps.items():
@@ -574,77 +678,30 @@ class FootballTriadExtractor:
                         'ltp': ltp
                     })
             
-            # Filter ticks within window
-            for tick in all_ticks:
-                if window_start_ms <= tick['timestamp_ms'] <= window_end_ms:
-                    filtered_ticks.append(tick)
+            # PHASE 1: Try to find exact triad
+            exact_window_start_utc = market_time_utc + timedelta(minutes=self.time_from)
+            exact_window_end_utc = market_time_utc + timedelta(minutes=self.time_to)
+            exact_window_start_ms = int(exact_window_start_utc.timestamp() * 1000)
+            exact_window_end_ms = int(exact_window_end_utc.timestamp() * 1000)
             
-            # Find synchronized triads
-            # Group ticks by timestamp to find potential triads
-            filtered_ticks.sort(key=lambda x: x['timestamp_ms'])
+            exact_candidates = self._find_triads_in_window(
+                runner_ltps,
+                home_runner_id,
+                draw_runner_id,
+                away_runner_id,
+                runner_info,
+                exact_window_start_ms,
+                exact_window_end_ms,
+                self.window_secs * 1000,  # Convert to milliseconds
+            )
             
-            # For each timestamp, try to find a triad where all 3 runners have LTPs within 60s
-            timestamps = sorted(set(tick['timestamp_ms'] for tick in filtered_ticks))
-            
-            for candidate_ts in timestamps:
-                # Find closest LTP for each runner relative to candidate_ts
-                runner_ltps_at_ts = {}
+            # If exact triad found, pick the latest one (closest to +60)
+            if exact_candidates:
+                best = max(exact_candidates, key=lambda x: x['snapshot_timestamp_ms'])
+                triad_candidates = exact_candidates
+                ht_selection_method = 'exact'
+                self.matches_with_exact_triads += 1
                 
-                for runner_id in [home_runner_id, draw_runner_id, away_runner_id]:
-                    if runner_id not in runner_ltps:
-                        continue
-                    
-                    # Get the most recent LTP for this runner at or before candidate_ts
-                    # that is within the window and within 60s of candidate_ts
-                    closest_ltp = None
-                    closest_ts = None
-                    
-                    for ts, ltp in runner_ltps[runner_id]:
-                        if ts <= candidate_ts and window_start_ms <= ts <= window_end_ms:
-                            time_diff = abs(candidate_ts - ts) / 1000  # in seconds
-                            if time_diff <= 60:
-                                if closest_ts is None or ts > closest_ts:
-                                    closest_ts = ts
-                                    closest_ltp = ltp
-                    
-                    if closest_ltp is not None:
-                        runner_ltps_at_ts[runner_id] = (closest_ts, closest_ltp)
-                
-                # Check if we have all 3 runners
-                if len(runner_ltps_at_ts) == 3:
-                    # Check if all timestamps are within 60s of each other
-                    timestamps_list = [ts for ts, ltp in runner_ltps_at_ts.values()]
-                    max_diff = max(timestamps_list) - min(timestamps_list)
-                    
-                    if max_diff <= 60000:  # 60 seconds in milliseconds
-                        entries = []
-                        for role, runner_id in [
-                            ('home', home_runner_id),
-                            ('draw', draw_runner_id),
-                            ('away', away_runner_id),
-                        ]:
-                            runner_ts, runner_ltp = runner_ltps_at_ts.get(runner_id, (None, None))
-                            if runner_id is None or runner_ts is None:
-                                continue
-                            runner_details = runner_info.get(runner_id, {})
-                            entries.append({
-                                'role': role,
-                                'runner_id': runner_id,
-                                'runner_name': runner_details.get('name', ''),
-                                'timestamp_ms': runner_ts,
-                                'ltp': runner_ltp,
-                            })
-                        
-                        if len(entries) == 3:
-                            triad_candidates.append({
-                                'snapshot_timestamp_ms': candidate_ts,
-                                'max_time_diff_ms': max_diff,
-                                'entries': entries,
-                            })
-            
-            # Select the latest triad (closest to +60 minutes)
-            if triad_candidates:
-                best = max(triad_candidates, key=lambda x: x['snapshot_timestamp_ms'])
                 triad_timestamp = datetime.fromtimestamp(best['snapshot_timestamp_ms'] / 1000, tz=timezone.utc)
                 
                 def extract_entry(role):
@@ -666,6 +723,61 @@ class FootballTriadExtractor:
                     'away_ts': away_entry.get('timestamp_ms'),
                     'away_ltp': away_entry.get('ltp'),
                 }
+            
+            # PHASE 2: If no exact triad, try relaxed triad
+            if not exact_candidates:
+                relaxed_window_start_utc = market_time_utc + timedelta(minutes=self.relaxed_time_from)
+                relaxed_window_end_utc = market_time_utc + timedelta(minutes=self.relaxed_time_to)
+                relaxed_window_start_ms = int(relaxed_window_start_utc.timestamp() * 1000)
+                relaxed_window_end_ms = int(relaxed_window_end_utc.timestamp() * 1000)
+                
+                relaxed_candidates = self._find_triads_in_window(
+                    runner_ltps,
+                    home_runner_id,
+                    draw_runner_id,
+                    away_runner_id,
+                    runner_info,
+                    relaxed_window_start_ms,
+                    relaxed_window_end_ms,
+                    self.relaxed_window_secs * 1000,  # Convert to milliseconds
+                )
+                
+                # If relaxed triad found, pick by: smallest max gap, then closest to +60
+                if relaxed_candidates:
+                    # Sort by: 1) smallest max_time_diff_ms, 2) latest timestamp
+                    best = min(relaxed_candidates, 
+                              key=lambda x: (x['max_time_diff_ms'], -x['snapshot_timestamp_ms']))
+                    
+                    triad_candidates = relaxed_candidates
+                    ht_selection_method = 'relaxed'
+                    self.matches_with_relaxed_triads += 1
+                    
+                    triad_timestamp = datetime.fromtimestamp(best['snapshot_timestamp_ms'] / 1000, tz=timezone.utc)
+                    
+                    def extract_entry(role):
+                        for entry in best['entries']:
+                            if entry['role'] == role:
+                                return entry
+                        return {}
+                    
+                    home_entry = extract_entry('home')
+                    draw_entry = extract_entry('draw')
+                    away_entry = extract_entry('away')
+                    
+                    triad = {
+                        'timestamp': best['snapshot_timestamp_ms'],
+                        'home_ts': home_entry.get('timestamp_ms'),
+                        'home_ltp': home_entry.get('ltp'),
+                        'draw_ts': draw_entry.get('timestamp_ms'),
+                        'draw_ltp': draw_entry.get('ltp'),
+                        'away_ts': away_entry.get('timestamp_ms'),
+                        'away_ltp': away_entry.get('ltp'),
+                    }
+            
+            # Filter ticks within exact window for backwards compatibility
+            for tick in all_ticks:
+                if exact_window_start_ms <= tick['timestamp_ms'] <= exact_window_end_ms:
+                    filtered_ticks.append(tick)
         
         # Prepare result
         # Use UTC time for display (to match results file format)
@@ -681,6 +793,7 @@ class FootballTriadExtractor:
             'home_odd_ht': triad['home_ltp'] if triad else '',
             'away_odd_ht': triad['away_ltp'] if triad else '',
             'draw_odd_ht': triad['draw_ltp'] if triad else '',
+            'ht_selection_method': ht_selection_method,
             'market_id': market_id,
             'event_id': event_id,
             'event_name': event_name,
@@ -1110,7 +1223,12 @@ class FootballTriadExtractor:
         
         logger.info(f"Processing complete: {self.processed_files} matches processed")
         logger.info(f"Matches with triads: {self.matches_with_triads}")
+        logger.info(f"  - Exact triads: {self.matches_with_exact_triads}")
+        logger.info(f"  - Relaxed triads: {self.matches_with_relaxed_triads}")
         logger.info(f"Matches without triads: {self.matches_without_triads}")
+        if self.processed_files > 0:
+            coverage = (self.matches_with_triads / self.processed_files) * 100
+            logger.info(f"Coverage: {coverage:.1f}%")
         logger.info(f"Games with timestamp mismatch (kick-off corrected): {self.kickoff_corrected_count} out of {self.processed_files}")
         logger.info(f"Market times aligned to 5 minutes (fallback): {self.aligned_count}")
         logger.info(f"Errors: {self.errors}")
@@ -1127,7 +1245,8 @@ class FootballTriadExtractor:
             headers = [
                 'MarketId', 'Div', 'DateTime', 'HomeTeam', 'AwayTeam',
                 'Home result', 'Away result', 'Draw result',
-                'Home odd HT', 'Away odd HT', 'Draw odd HT', 'KickOff_2_30_lastodd', 'KickOff_2_30_lasttick',
+                'Home odd HT', 'Away odd HT', 'Draw odd HT', 'ht_selection_method',
+                'KickOff_2_30_lastodd', 'KickOff_2_30_lasttick',
                 'total_ltp_updates'
             ]
             
@@ -1175,6 +1294,7 @@ class FootballTriadExtractor:
                         match.get('home_odd_ht', ''),
                         match.get('away_odd_ht', ''),
                         match.get('draw_odd_ht', ''),
+                        match.get('ht_selection_method', 'none'),
                         kickoff_2_30_lastodd,
                         kickoff_2_30_lasttick,
                         total_ltp_updates,
@@ -1198,7 +1318,7 @@ class FootballTriadExtractor:
                 'lastODDDateTime', 'lastTickDateTime', 'lastTriadDateTime', 
                 'KickOff_2_30_lastodd', 'KickOff_2_30_lasttick', 'total_ltp_updates',
                 'HomeTeam', 'AwayTeam', 'Home result', 'Away result', 'Draw result',
-                'Home odd HT', 'Away odd HT', 'Draw odd HT'
+                'Home odd HT', 'Away odd HT', 'Draw odd HT', 'ht_selection_method'
             ]
             
             with open(file_path, 'w', newline='', encoding='utf-8') as f:
@@ -1291,6 +1411,7 @@ class FootballTriadExtractor:
                         match.get('home_odd_ht', ''),
                         match.get('away_odd_ht', ''),
                         match.get('draw_odd_ht', ''),
+                        match.get('ht_selection_method', 'none'),
                     ])
             
             logger.info(f"Successfully wrote {len(rows)} matches to {file_path}")
@@ -1397,6 +1518,10 @@ Examples:
 
     time_from = _get_int('time_from', 55)
     time_to = _get_int('time_to', 60)
+    window_secs = _get_int('window_secs', 60)
+    relaxed_time_from = _get_int('relaxed_time_from', 54)
+    relaxed_time_to = _get_int('relaxed_time_to', 60)
+    relaxed_window_secs = _get_int('relaxed_window_secs', 180)
 
     debug_value = raw_settings.get('debug', raw_settings.get('enable_debug', 'N'))
     debug = _parse_bool(debug_value) if debug_value is not None else False
@@ -1404,6 +1529,10 @@ Examples:
     if time_from > time_to:
         logger.warning(f"time_from ({time_from}) greater than time_to ({time_to}). Swapping values.")
         time_from, time_to = time_to, time_from
+    
+    if relaxed_time_from > relaxed_time_to:
+        logger.warning(f"relaxed_time_from ({relaxed_time_from}) greater than relaxed_time_to ({relaxed_time_to}). Swapping values.")
+        relaxed_time_from, relaxed_time_to = relaxed_time_to, relaxed_time_from
 
     # Create extractor
     extractor = FootballTriadExtractor(
@@ -1411,6 +1540,10 @@ Examples:
         output_dir=output_dir,
         time_from=time_from,
         time_to=time_to,
+        window_secs=window_secs,
+        relaxed_time_from=relaxed_time_from,
+        relaxed_time_to=relaxed_time_to,
+        relaxed_window_secs=relaxed_window_secs,
         debug=debug
     )
     
