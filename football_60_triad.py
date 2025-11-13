@@ -66,38 +66,36 @@ def extract_minute_pattern(market_time_str: str) -> Optional[int]:
 
 def snap_down_to_pattern(dt: datetime, minute_pattern: int) -> datetime:
     """
-    Snap a datetime down to the nearest occurrence of minute_pattern.
+    Snap a datetime down to preserve the exact minute pattern from marketTime.
+    Only the hour is adjusted; minutes remain the same as the pattern.
     
     Args:
         dt: The datetime to snap
-        minute_pattern: The target minute (0, 15, 30, 45, or other value)
+        minute_pattern: The target minute from marketTime (e.g., 0, 15, 30, 45, etc.)
     
     Returns:
-        datetime snapped down to the pattern
+        datetime with the exact minute pattern, snapped to current or previous hour
     
     Example:
-        dt = 2019-05-12 17:23:00, minute_pattern = 0
-        returns 2019-05-12 17:00:00
-    """
-    # Common patterns (0, 15, 30, 45)
-    common_patterns = [0, 15, 30, 45]
-    
-    if minute_pattern in common_patterns:
-        # Find the largest pattern minute less than or equal to current minute
-        current_minute = dt.minute
-        for pm in sorted(common_patterns, reverse=True):
-            if current_minute >= pm and pm <= minute_pattern:
-                return dt.replace(minute=pm, second=0, microsecond=0)
+        dt = 2019-05-12 17:23:00, minute_pattern = 45
+        returns 2019-05-12 16:45:00 (previous hour, since 23 < 45)
         
-        # If we're before the first pattern in this hour, go to previous hour
-        return (dt - timedelta(hours=1)).replace(minute=minute_pattern, second=0, microsecond=0)
+        dt = 2019-05-12 17:50:00, minute_pattern = 45
+        returns 2019-05-12 17:45:00 (current hour, since 50 >= 45)
+    """
+    # Preserve the exact minute pattern from marketTime
+    # Snap DOWN to the pattern minute in current or previous hour
+    # We want the most recent occurrence of the pattern minute that is <= dt
+    
+    # Try current hour first
+    candidate = dt.replace(minute=minute_pattern, second=0, microsecond=0)
+    
+    if candidate <= dt:
+        # Pattern minute in current hour is before or at dt
+        return candidate
     else:
-        # For non-standard patterns (like XX:35), snap to exact minute
-        # Go to the same minute in current or previous hour
-        if dt.minute >= minute_pattern:
-            return dt.replace(minute=minute_pattern, second=0, microsecond=0)
-        else:
-            return (dt - timedelta(hours=1)).replace(minute=minute_pattern, second=0, microsecond=0)
+        # Pattern minute hasn't occurred yet this hour, go to previous hour
+        return (dt - timedelta(hours=1)).replace(minute=minute_pattern, second=0, microsecond=0)
 
 
 def calculate_correct_kickoff(
@@ -239,7 +237,8 @@ class FootballTriadExtractor:
             first_open_date_str = None
             runner_ltps = defaultdict(list)  # runner_id -> [(timestamp_ms, ltp), ...]
             match_odds_market_id = None
-            last_price_timestamp_ms = None  # Track the last timestamp for kickoff correction
+            last_price_timestamp_ms = None  # Track the last price update timestamp for kickoff correction
+            last_tick_timestamp_ms = None  # Track the absolute last timestamp in the file
             
             with open(file_path, 'r', encoding='utf-8') as f:
                 for line in f:
@@ -263,6 +262,15 @@ class FootballTriadExtractor:
                     
                     for market_change in mc:
                         current_market_id = market_change.get('id', '')
+                        
+                        # Track the absolute last timestamp for this market
+                        if timestamp_ms and match_odds_market_id and current_market_id == match_odds_market_id:
+                            try:
+                                ts_ms, _ = self._normalize_timestamp(timestamp_ms)
+                                if last_tick_timestamp_ms is None or ts_ms > last_tick_timestamp_ms:
+                                    last_tick_timestamp_ms = ts_ms
+                            except Exception:
+                                pass
                         
                         # Extract market definition (metadata)
                         if 'marketDefinition' in market_change:
@@ -353,12 +361,33 @@ class FootballTriadExtractor:
                                f"last_price={last_price_time.strftime('%Y-%m-%d %H:%M:%S')}, "
                                f"duration={match_duration_hours:.2f}h")
                     
-                    # Apply kick-off correction logic to ALL games
+                    # Step 1: Apply kick-off correction using lastODDDateTime
                     corrected_kickoff_time, original_market_time, minute_pattern = calculate_correct_kickoff(
                         first_market_time_str,
                         last_price_timestamp_ms
                     )
                     
+                    # Step 2: Check if correction matches marketTime
+                    correction_matches = False
+                    if corrected_kickoff_time and original_market_time:
+                        time_diff = (corrected_kickoff_time - original_market_time).total_seconds() / 3600
+                        if abs(time_diff) <= 0.01:  # Within ~30 seconds
+                            correction_matches = True
+                    
+                    # Step 3: If doesn't match, try with lastTickDateTime
+                    if not correction_matches and last_tick_timestamp_ms:
+                        logger.debug(f"Correction with lastODD didn't match, trying with lastTick for {match_odds_market_id}")
+                        corrected_kickoff_time, original_market_time, minute_pattern = calculate_correct_kickoff(
+                            first_market_time_str,
+                            last_tick_timestamp_ms
+                        )
+                        
+                        if corrected_kickoff_time and original_market_time:
+                            time_diff = (corrected_kickoff_time - original_market_time).total_seconds() / 3600
+                            if abs(time_diff) <= 0.01:  # Within ~30 seconds
+                                correction_matches = True
+                    
+                    # Step 4: Log if still doesn't match
                     if corrected_kickoff_time and original_market_time:
                         time_diff = (corrected_kickoff_time - original_market_time).total_seconds() / 3600
                         logger.debug(f"Correction calculated: {original_market_time.strftime('%H:%M')} -> "
@@ -412,6 +441,13 @@ class FootballTriadExtractor:
                     match_data['last_price_update_time'] = last_price_dt.strftime('%Y-%m-%d %H:%M:%S')
                 else:
                     match_data['last_price_update_time'] = ''
+                
+                # Add last tick update time (absolute last timestamp in file)
+                if last_tick_timestamp_ms:
+                    last_tick_dt = datetime.fromtimestamp(last_tick_timestamp_ms / 1000, tz=timezone.utc)
+                    match_data['last_tick_update_time'] = last_tick_dt.strftime('%Y-%m-%d %H:%M:%S')
+                else:
+                    match_data['last_tick_update_time'] = ''
             
             return match_data
             
@@ -1090,7 +1126,7 @@ class FootballTriadExtractor:
             headers = [
                 'MarketId', 'Div', 'DateTime', 'HomeTeam', 'AwayTeam',
                 'Home result', 'Away result', 'Draw result',
-                'Home odd HT', 'Away odd HT', 'Draw odd HT', 'KickOff_2_15_offset'
+                'Home odd HT', 'Away odd HT', 'Draw odd HT', 'KickOff_2_30_lastodd', 'KickOff_2_30_lasttick'
             ]
             
             with open(file_path, 'w', newline='', encoding='utf-8') as f:
@@ -1103,9 +1139,23 @@ class FootballTriadExtractor:
                     time_str = match.get('time', '')
                     datetime_str = f"{date_str} {time_str}" if date_str and time_str else ''
                     
-                    # KickOff_2_15_offset: Y if match duration > 2h 15min
+                    # KickOff_2_30_lastodd: Y if lastODD - marketTime > 2h 30min
                     match_duration = match.get('match_duration_hours')
-                    kickoff_2_15 = 'Y' if match_duration and match_duration > 2.25 else 'N'
+                    kickoff_2_30_lastodd = 'Y' if match_duration and match_duration > 2.5 else 'N'
+                    
+                    # KickOff_2_30_lasttick: Y if lastTick - marketTime > 2h 30min
+                    # Need to calculate lastTick duration
+                    kickoff_2_30_lasttick = 'N'
+                    original_market_time_str = match.get('original_market_time', '')
+                    last_tick_time_str = match.get('last_tick_update_time', '')
+                    if original_market_time_str and last_tick_time_str:
+                        try:
+                            original_dt = datetime.strptime(original_market_time_str, '%Y-%m-%d %H:%M:%S')
+                            last_tick_dt = datetime.strptime(last_tick_time_str, '%Y-%m-%d %H:%M:%S')
+                            tick_duration_hours = (last_tick_dt - original_dt).total_seconds() / 3600
+                            kickoff_2_30_lasttick = 'Y' if tick_duration_hours > 2.5 else 'N'
+                        except Exception:
+                            pass
                     
                     writer.writerow([
                         match.get('market_id', ''),
@@ -1119,7 +1169,8 @@ class FootballTriadExtractor:
                         match.get('home_odd_ht', ''),
                         match.get('away_odd_ht', ''),
                         match.get('draw_odd_ht', ''),
-                        kickoff_2_15,
+                        kickoff_2_30_lastodd,
+                        kickoff_2_30_lasttick,
                     ])
             
             logger.info(f"Successfully wrote {len(rows)} matches to {file_path}")
@@ -1137,7 +1188,8 @@ class FootballTriadExtractor:
         try:
             headers = [
                 'MarketId', 'Div', 'correctedDateTime', 'definitionDateTime', 
-                'lastODDDateTime', 'lastTriadDateTime', 'KickOff_2_15_offset',
+                'lastODDDateTime', 'lastTickDateTime', 'lastTriadDateTime', 
+                'KickOff_2_30_lastodd', 'KickOff_2_30_lasttick',
                 'HomeTeam', 'AwayTeam', 'Home result', 'Away result', 'Draw result',
                 'Home odd HT', 'Away odd HT', 'Draw odd HT'
             ]
@@ -1172,6 +1224,16 @@ class FootballTriadExtractor:
                         except Exception:
                             pass
                     
+                    # lastTickDateTime: Absolute last timestamp in file
+                    last_tick_datetime = match.get('last_tick_update_time', '')
+                    if last_tick_datetime:
+                        # Format to "2019-06-01 14:00" (remove seconds if present)
+                        try:
+                            dt = datetime.strptime(last_tick_datetime, '%Y-%m-%d %H:%M:%S')
+                            last_tick_datetime = dt.strftime('%Y-%m-%d %H:%M')
+                        except Exception:
+                            pass
+                    
                     # lastTriadDateTime: Last triad time
                     triad_timestamp = match.get('triad_timestamp')
                     if triad_timestamp:
@@ -1182,9 +1244,22 @@ class FootballTriadExtractor:
                     else:
                         last_triad_datetime = '0000-00-00 00:00'
                     
-                    # KickOff_2_15_offset: Y if match duration > 2h 15min
+                    # KickOff_2_30_lastodd: Y if lastODD - marketTime > 2h 30min
                     match_duration = match.get('match_duration_hours')
-                    kickoff_2_15 = 'Y' if match_duration and match_duration > 2.25 else 'N'
+                    kickoff_2_30_lastodd = 'Y' if match_duration and match_duration > 2.5 else 'N'
+                    
+                    # KickOff_2_30_lasttick: Y if lastTick - marketTime > 2h 30min
+                    kickoff_2_30_lasttick = 'N'
+                    original_market_time_str = match.get('original_market_time', '')
+                    last_tick_time_str = match.get('last_tick_update_time', '')
+                    if original_market_time_str and last_tick_time_str:
+                        try:
+                            original_dt = datetime.strptime(original_market_time_str, '%Y-%m-%d %H:%M:%S')
+                            last_tick_dt = datetime.strptime(last_tick_time_str, '%Y-%m-%d %H:%M:%S')
+                            tick_duration_hours = (last_tick_dt - original_dt).total_seconds() / 3600
+                            kickoff_2_30_lasttick = 'Y' if tick_duration_hours > 2.5 else 'N'
+                        except Exception:
+                            pass
                     
                     writer.writerow([
                         match.get('market_id', ''),
@@ -1192,8 +1267,10 @@ class FootballTriadExtractor:
                         corrected_datetime,
                         definition_datetime,
                         last_odd_datetime,
+                        last_tick_datetime,
                         last_triad_datetime,
-                        kickoff_2_15,
+                        kickoff_2_30_lastodd,
+                        kickoff_2_30_lasttick,
                         match.get('home_team', ''),
                         match.get('away_team', ''),
                         match.get('home_result', ''),
