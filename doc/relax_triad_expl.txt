@@ -1,0 +1,40 @@
+I also noticed that only ~33% of matches have a valid triad with the current rule. To improve coverage, could we support two modes:
+
+
+
+1. Exact triad (current rule)
+- Window: [+52; +60] minutes from scheduled kickoff
+- Sync: max 60s between 1 / X / 2
+- Pick the latest triad in the window
+2. Relaxed triad (fallback if no exact triad found)
+- Tighter window: [+54; +60]
+- Sync: max 180s between 1 / X / 2
+- Selection priority:
+1. Choose the triad with the smallest max gap between the three timestamps
+2. If tied, pick the one closest to +60:00.
+
+
+
+Please add a column to the output indicating which rule was used per match:
+- ht_selection_method = exact, relaxed, or none (if still nothing, keep the HT odds empty as agreed)
+
+- Exact triad (primary): window +52 to +60, max 60s between 1/X/2, pick the latest triad.
+- Relaxed triad (backup only): use only if no exact triad exists. Window +54 to +60, max 180s between 1/X/2. Selection priority: smallest max gap, then closest to +60:00.
+
+
+
+So to be clear: relaxed is just a fallback to increase coverage when exact is not available.
+
+Small schema note: please add only one column
+
+ht_selection_method = exact, relaxed, or none.
+- If the criteria are met with Exact or Relaxed, the odds go into the same HT columns Home odd HT, Draw odd HT, Away odd HT).
+- If ht_selection_method = none, keep those three HT odds empty.
+
+in settingscfg there are 
+relaxed_time_from=54
+relaxed_time_to=60
+relaxed_window_secs=180
+
+use them  for  relax triad
+

@@ -696,6 +696,7 @@ class FootballTriadExtractor:
             'away_runner_id': away_runner_id if len(sorted_runners) == 3 else None,
             'runner_ltps': {runner_id: list(ltps) for runner_id, ltps in runner_ltps.items()},
             'triad_candidates': triad_candidates,
+            'total_ltp_updates': len(all_ticks),
         }
         
         if triad:
@@ -1126,7 +1127,8 @@ class FootballTriadExtractor:
             headers = [
                 'MarketId', 'Div', 'DateTime', 'HomeTeam', 'AwayTeam',
                 'Home result', 'Away result', 'Draw result',
-                'Home odd HT', 'Away odd HT', 'Draw odd HT', 'KickOff_2_30_lastodd', 'KickOff_2_30_lasttick'
+                'Home odd HT', 'Away odd HT', 'Draw odd HT', 'KickOff_2_30_lastodd', 'KickOff_2_30_lasttick',
+                'total_ltp_updates'
             ]
             
             with open(file_path, 'w', newline='', encoding='utf-8') as f:
@@ -1157,6 +1159,10 @@ class FootballTriadExtractor:
                         except Exception:
                             pass
                     
+                    total_ltp_updates = match.get('total_ltp_updates')
+                    if total_ltp_updates is None:
+                        total_ltp_updates = len(match.get('all_ticks', []))
+                    
                     writer.writerow([
                         match.get('market_id', ''),
                         match.get('div', ''),
@@ -1171,6 +1177,7 @@ class FootballTriadExtractor:
                         match.get('draw_odd_ht', ''),
                         kickoff_2_30_lastodd,
                         kickoff_2_30_lasttick,
+                        total_ltp_updates,
                     ])
             
             logger.info(f"Successfully wrote {len(rows)} matches to {file_path}")
@@ -1189,7 +1196,7 @@ class FootballTriadExtractor:
             headers = [
                 'MarketId', 'Div', 'correctedDateTime', 'definitionDateTime', 
                 'lastODDDateTime', 'lastTickDateTime', 'lastTriadDateTime', 
-                'KickOff_2_30_lastodd', 'KickOff_2_30_lasttick',
+                'KickOff_2_30_lastodd', 'KickOff_2_30_lasttick', 'total_ltp_updates',
                 'HomeTeam', 'AwayTeam', 'Home result', 'Away result', 'Draw result',
                 'Home odd HT', 'Away odd HT', 'Draw odd HT'
             ]
@@ -1261,6 +1268,10 @@ class FootballTriadExtractor:
                         except Exception:
                             pass
                     
+                    total_ltp_updates = match.get('total_ltp_updates')
+                    if total_ltp_updates is None:
+                        total_ltp_updates = len(match.get('all_ticks', []))
+                    
                     writer.writerow([
                         match.get('market_id', ''),
                         match.get('div', ''),
@@ -1271,6 +1282,7 @@ class FootballTriadExtractor:
                         last_triad_datetime,
                         kickoff_2_30_lastodd,
                         kickoff_2_30_lasttick,
+                        total_ltp_updates,
                         match.get('home_team', ''),
                         match.get('away_team', ''),
                         match.get('home_result', ''),
