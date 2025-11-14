@@ -1314,11 +1314,12 @@ class FootballTriadExtractor:
         
         try:
             headers = [
-                'MarketId', 'Div', 'correctedDateTime', 'definitionDateTime', 
-                'lastODDDateTime', 'lastTickDateTime', 'lastTriadDateTime', 
-                'KickOff_2_30_lastodd', 'KickOff_2_30_lasttick', 'total_ltp_updates',
+                'MarketId', 'Div', 'correctedDateTime', 'definitionDateTime',
+                'lastODDDateTime', 'lastTickDateTime', 'lastTriadDateTime',
+                'KickOff_2_30_lastodd', 'KickOff_2_30_lasttick',
+                'ht_selection_method', 'total_ltp_updates',
                 'HomeTeam', 'AwayTeam', 'Home result', 'Away result', 'Draw result',
-                'Home odd HT', 'Away odd HT', 'Draw odd HT', 'ht_selection_method'
+                'Home odd HT', 'Away odd HT', 'Draw odd HT'
             ]
             
             with open(file_path, 'w', newline='', encoding='utf-8') as f:
@@ -1402,6 +1403,7 @@ class FootballTriadExtractor:
                         last_triad_datetime,
                         kickoff_2_30_lastodd,
                         kickoff_2_30_lasttick,
+                        match.get('ht_selection_method', 'none'),
                         total_ltp_updates,
                         match.get('home_team', ''),
                         match.get('away_team', ''),
@@ -1411,7 +1413,6 @@ class FootballTriadExtractor:
                         match.get('home_odd_ht', ''),
                         match.get('away_odd_ht', ''),
                         match.get('draw_odd_ht', ''),
-                        match.get('ht_selection_method', 'none'),
                     ])
             
             logger.info(f"Successfully wrote {len(rows)} matches to {file_path}")
