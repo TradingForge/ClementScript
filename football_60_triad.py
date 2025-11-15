@@ -696,9 +696,13 @@ class FootballTriadExtractor:
             )
             
             # If exact triad found, pick the latest one (closest to +60)
+            exact_triad_candidates = []
+            relaxed_triad_candidates = []
+            
             if exact_candidates:
                 best = max(exact_candidates, key=lambda x: x['snapshot_timestamp_ms'])
                 triad_candidates = exact_candidates
+                exact_triad_candidates = exact_candidates
                 ht_selection_method = 'exact'
                 self.matches_with_exact_triads += 1
                 
@@ -749,6 +753,7 @@ class FootballTriadExtractor:
                               key=lambda x: (x['max_time_diff_ms'], -x['snapshot_timestamp_ms']))
                     
                     triad_candidates = relaxed_candidates
+                    relaxed_triad_candidates = relaxed_candidates
                     ht_selection_method = 'relaxed'
                     self.matches_with_relaxed_triads += 1
                     
@@ -809,6 +814,8 @@ class FootballTriadExtractor:
             'away_runner_id': away_runner_id if len(sorted_runners) == 3 else None,
             'runner_ltps': {runner_id: list(ltps) for runner_id, ltps in runner_ltps.items()},
             'triad_candidates': triad_candidates,
+            'exact_triad_candidates': exact_triad_candidates,
+            'relaxed_triad_candidates': relaxed_triad_candidates,
             'total_ltp_updates': len(all_ticks),
         }
         
@@ -942,6 +949,8 @@ class FootballTriadExtractor:
             runner_ltps = match_data.get('runner_ltps')
             market_id = match_data.get('market_id')
             market_time = match_data.get('market_time')
+            ht_selection_method = match_data.get('ht_selection_method', 'none')
+            
             if not runner_ltps or not market_id or not market_time:
                 return
 
@@ -969,7 +978,8 @@ class FootballTriadExtractor:
             if not any(filtered_runner_ltps.values()):
                 return
 
-            header = []
+            # Add min_from and max_to columns at the beginning
+            header = ['min_from', 'max_to']
             for _ in selection_ids:
                 header.extend(['pt', 'pt_utc', 'marketId', 'selectionId', 'ltp'])
 
@@ -978,6 +988,12 @@ class FootballTriadExtractor:
             rows = []
             for idx in range(max_len):
                 row = []
+                # Add min_from and max_to values in the first row only
+                if idx == 0:
+                    row.extend([window_start_min, window_end_min])
+                else:
+                    row.extend(['', ''])
+                    
                 for selection_id in selection_ids:
                     ticks = filtered_runner_ltps.get(selection_id, [])
                     if idx < len(ticks):
@@ -1004,9 +1020,10 @@ class FootballTriadExtractor:
             logger.error(f"Error creating filtered selections CSV: {e}")
 
     def create_triad_csv(self, match_data: Dict, file_path: Path):
-        """Create CSV containing all synchronized triad snapshots."""
+        """Create CSV containing exact triad snapshots (max 60 sec gap)."""
         try:
-            triad_candidates = match_data.get('triad_candidates') or []
+            # Only use exact triad candidates (not relaxed)
+            triad_candidates = match_data.get('exact_triad_candidates') or []
             if not triad_candidates:
                 return
 
@@ -1082,6 +1099,95 @@ class FootballTriadExtractor:
 
         except Exception as e:
             logger.error(f"Error creating triad CSV: {e}")
+
+    def create_relaxed_triad_csv(self, match_data: Dict, file_path: Path):
+        """Create CSV containing relaxed triad snapshots (max 180 sec gap, only when relaxed method is used)."""
+        try:
+            # Only use relaxed triad candidates
+            triad_candidates = match_data.get('relaxed_triad_candidates') or []
+            if not triad_candidates:
+                return
+
+            market_id = match_data.get('market_id')
+            market_time = match_data.get('market_time')
+            runner_info = match_data.get('runner_info', {})
+            if not market_id or not market_time:
+                return
+
+            market_time_ms = int(market_time.replace(tzinfo=timezone.utc).timestamp() * 1000)
+
+            header = [
+                'triad_index',
+                'snapshot_pt',
+                'snapshot_pt_utc',
+                'snapshot_offset_min',
+                'marketId',
+                'max_time_diff_sec',
+                'role',
+                'selectionId',
+                'selectionName',
+                'runner_pt',
+                'runner_pt_utc',
+                'ltp',
+                'min_from',
+                'max_to',
+            ]
+
+            rows = []
+            role_order = {'home': 0, 'draw': 1, 'away': 2}
+
+            for idx, triad in enumerate(sorted(triad_candidates, key=lambda x: x['snapshot_timestamp_ms']), start=1):
+                snapshot_ms = triad['snapshot_timestamp_ms']
+                snapshot_dt = datetime.fromtimestamp(snapshot_ms / 1000, tz=timezone.utc)
+                snapshot_pt_utc = snapshot_dt.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                offset_min = (snapshot_ms - market_time_ms) / 60000 if market_time_ms else ''
+                max_diff_sec = (triad.get('max_time_diff_ms') or 0) / 1000
+
+                entries = sorted(triad['entries'], key=lambda e: role_order.get(e.get('role', ''), 99))
+
+                for entry_idx, entry in enumerate(entries):
+                    runner_ts_ms = entry.get('timestamp_ms')
+                    runner_dt = datetime.fromtimestamp(runner_ts_ms / 1000, tz=timezone.utc) if runner_ts_ms is not None else None
+                    runner_pt_utc = runner_dt.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3] if runner_dt else ''
+
+                    # Add min_from and max_to only for the first entry of each triad
+                    min_from_val = self.relaxed_time_from if entry_idx == 0 else ''
+                    max_to_val = self.relaxed_time_to if entry_idx == 0 else ''
+
+                    rows.append([
+                        idx,
+                        snapshot_ms,
+                        snapshot_pt_utc,
+                        offset_min,
+                        market_id,
+                        max_diff_sec,
+                        entry.get('role', ''),
+                        entry.get('runner_id', ''),
+                        runner_info.get(entry.get('runner_id'), {}).get('name', entry.get('runner_name', '')),
+                        runner_ts_ms,
+                        runner_pt_utc,
+                        entry.get('ltp', ''),
+                        min_from_val,
+                        max_to_val,
+                    ])
+
+            if not rows:
+                return
+
+            relative_path = file_path.relative_to(self.input_dir)
+            output_dir = self.results_dir / relative_path.parent
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_file = output_dir / f"{file_path.name}_relax_triad.csv"
+
+            with open(output_file, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(header)
+                writer.writerows(rows)
+
+            logger.debug(f"Created relaxed triad CSV: {output_file}")
+
+        except Exception as e:
+            logger.error(f"Error creating relaxed triad CSV: {e}")
 
     def create_market_info_file(self, match_data: Dict, file_path: Path):
         """Create market info file with match metadata and runner information."""
@@ -1215,8 +1321,12 @@ class FootballTriadExtractor:
 
                     # Create selections CSVs and triad diagnostics
                     self.create_selection_csv(match_data, file_path)
-                    self.create_selection_filtered_csv(match_data, file_path, self.time_from, self.time_to)
+                    # Use combined window (min to max across both exact and relaxed windows)
+                    combined_min = min(self.time_from, self.relaxed_time_from)
+                    combined_max = max(self.time_to, self.relaxed_time_to)
+                    self.create_selection_filtered_csv(match_data, file_path, combined_min, combined_max)
                     self.create_triad_csv(match_data, file_path)
+                    self.create_relaxed_triad_csv(match_data, file_path)
                     
                     # Create market info file
                     self.create_market_info_file(match_data, file_path)
