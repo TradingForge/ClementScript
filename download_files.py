@@ -9,14 +9,70 @@ import sys
 from datetime import datetime, timedelta
 import betfairlightweight
 
+
 # Configuration
-BETFAIR_USERNAME = ""  # Fill in your Betfair username
-BETFAIR_PASSWORD = ""  # Fill in your Betfair password
-BETFAIR_APP_KEY = ""   # Fill in your Betfair app key
+BETFAIR_USERNAME = "m.tradingforge@gmail.com"  # Fill in your Betfair username
+BETFAIR_PASSWORD = "KLUHd7d%jhg!!"  # Fill in your Betfair password
+BETFAIR_APP_KEY = "vPNcomt9ZMAxsVqw"   # Fill in your Betfair app key
 
 OUTPUT_DIR = "football_data_zip"  # Directory to save downloaded files
 SPORT = "Soccer"  # Sport name in Betfair system
 
+# Default certificates directory inside the project root
+# Will be resolved relative to this file, i.e. "<project>/Certificates"
+DEFAULT_CERTS_DIR = os.path.join(os.path.dirname(__file__), "Certificates")
+
+def _find_cert_files(certs_dir):
+    """Try to find client cert and key files in the given directory."""
+    if not certs_dir or not os.path.isdir(certs_dir):
+        return None
+    # Ensure certs_dir is a string, not a tuple
+    if isinstance(certs_dir, tuple):
+        certs_dir = certs_dir[0] if certs_dir else None
+    if not certs_dir:
+        return None
+    entries = os.listdir(certs_dir)
+    # Prefer common Betfair names
+    candidates_cert = [
+        "client-2048.crt",
+        "client.crt",
+        "client.pem",
+        "certificate.pem",
+    ]
+    candidates_key = [
+        "client-2048.key",
+        "client.key",
+        "key.pem",
+        "private.key",
+    ]
+    cert_path = None
+    key_path = None
+    for name in candidates_cert:
+        p = os.path.join(certs_dir, name)
+        if os.path.isfile(p):
+            cert_path = p
+            break
+    for name in candidates_key:
+        p = os.path.join(certs_dir, name)
+        if os.path.isfile(p):
+            key_path = p
+            break
+    if cert_path and key_path:
+        return (cert_path, key_path)
+    # As a fallback, try to pick any .crt/.pem and any .key in the directory
+    if not cert_path:
+        for e in entries:
+            if e.lower().endswith((".crt", ".pem")):
+                cert_path = os.path.join(certs_dir, e)
+                break
+    if not key_path:
+        for e in entries:
+            if e.lower().endswith(".key"):
+                key_path = os.path.join(certs_dir, e)
+                break
+    if cert_path and key_path:
+        return (cert_path, key_path)
+    return None
 
 def ensure_output_directory():
     """Create output directory if it doesn't exist."""
@@ -34,12 +90,28 @@ def connect_to_betfair():
         sys.exit(1)
     
     try:
-        trading = betfairlightweight.APIClient(
-            username=BETFAIR_USERNAME,
-            password=BETFAIR_PASSWORD,
-            app_key=BETFAIR_APP_KEY
-        )
-        trading.login()
+        # Prefer certificate login if ./Certificates exists and contains cert+key
+        # Check if certificates exist in the Certificates directory
+        cert_tuple = _find_cert_files(DEFAULT_CERTS_DIR)
+        if cert_tuple:
+            # betfairlightweight expects a directory path, not a tuple
+            trading = betfairlightweight.APIClient(
+                username=BETFAIR_USERNAME,
+                password=BETFAIR_PASSWORD,
+                app_key=BETFAIR_APP_KEY,
+                certs=DEFAULT_CERTS_DIR  # Pass directory path
+            )
+            print(f"Using certificates from: {DEFAULT_CERTS_DIR}")
+            trading.login()
+        else:
+            # Fallback to interactive login (may require 2FA)
+            trading = betfairlightweight.APIClient(
+                username=BETFAIR_USERNAME,
+                password=BETFAIR_PASSWORD,
+                app_key=BETFAIR_APP_KEY,
+                certs=None
+            )
+            trading.login_interactive()
         print("Successfully logged in to Betfair")
         return trading
     except Exception as e:
