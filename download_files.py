@@ -6,6 +6,7 @@ This script downloads football data files from Betfair's free plan.
 
 import os
 import sys
+import time
 from datetime import datetime, timedelta
 import betfairlightweight
 
@@ -119,29 +120,47 @@ def connect_to_betfair():
         sys.exit(1)
 
 
-def get_available_files(trading):
-    """Get list of available historical data files."""
+def get_available_files(trading, max_retries=3, retry_delay=5):
+    """Get list of available historical data files with retry logic."""
     print("\nFetching available historical data files...")
     
-    try:
-        # Get the list of purchased/available historical data
-        my_data = trading.historic.get_my_data()
+    for attempt in range(1, max_retries + 1):
+        try:
+            print(f"  Attempt {attempt}/{max_retries}...", end='', flush=True)
+            # Get the list of purchased/available historical data
+            my_data = trading.historic.get_my_data()
+            
+            if not my_data:
+                print(" No data found")
+                return []
+            
+            print(f" Success! Found {len(my_data)} data items")
+            
+            for idx, item in enumerate(my_data, 1):
+                print(f"  {idx}. Sport: {item.get('sport', 'N/A')}, "
+                      f"Date: {item.get('forDate', 'N/A')}, "
+                      f"Plan: {item.get('plan', 'N/A')}, "
+                      f"ID: {item.get('purchaseItemId', 'N/A')}")
+            
+            return my_data
         
-        if not my_data:
-            return []
-        
-        print(f"\nFound {len(my_data)} data items:")
-        for idx, item in enumerate(my_data, 1):
-            print(f"  {idx}. Sport: {item.get('sport', 'N/A')}, "
-                  f"Date: {item.get('forDate', 'N/A')}, "
-                  f"Plan: {item.get('plan', 'N/A')}, "
-                  f"ID: {item.get('purchaseItemId', 'N/A')}")
-        
-        return my_data
+        except Exception as e:
+            error_msg = str(e)
+            if "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
+                if attempt < max_retries:
+                    print(f" Timeout - retrying in {retry_delay} seconds...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                    continue
+                else:
+                    print(f" Failed after {max_retries} attempts")
+                    print(f"ERROR: Connection timeout. The Betfair API may be slow or unavailable.")
+                    print(f"       Try running the script again later.")
+            else:
+                print(f" Failed: {e}")
+                return []
     
-    except Exception as e:
-        print(f"ERROR: Failed to get available files: {e}")
-        return []
+    return []
 
 
 def filter_football_files(data_items, years_back=20):
@@ -172,43 +191,170 @@ def filter_football_files(data_items, years_back=20):
     return football_items
 
 
-def get_file_list(trading, purchase_item_id):
-    """Get detailed file list for a specific purchase item."""
-    try:
-        file_list = trading.historic.get_file_list(
-            purchase_item_id=purchase_item_id
-        )
-        return file_list
-    except Exception as e:
-        print(f"  ERROR: Failed to get file list for item {purchase_item_id}: {e}")
+def _map_plan_name(plan_value: str) -> str:
+    """Normalise plan name for historic.get_file_list positional arg."""
+    if not plan_value:
+        return "Basic"
+    pv = plan_value.lower()
+    if "basic" in pv:
+        return "Basic"
+    if "advanced" in pv:
+        return "Advanced"
+    if "pro" in pv:
+        return "Pro"
+    return plan_value
+
+
+def _build_local_path(plan_value: str, file_path: str):
+    """Build local directory structure mirroring Betfair hierarchy."""
+    plan_token = _map_plan_name(plan_value).upper()
+    norm = os.path.normpath(file_path)
+    parts = norm.replace("\\", "/").split("/")
+    parts = [p for p in parts if p and p not in (".", "..")]
+
+    rel_parts = parts
+    if plan_token in parts:
+        idx = parts.index(plan_token)
+        rel_parts = parts[idx:]
+
+    if not rel_parts:
+        return "", os.path.basename(file_path.strip("/"))
+
+    local_dir = os.path.join(*rel_parts[:-1]) if len(rel_parts) > 1 else ""
+    filename = rel_parts[-1]
+    return local_dir, filename
+
+
+def _month_range_from_iso(date_str: str):
+    """Return first and last day components for the month of date_str (YYYY-MM-DD...)."""
+    d = datetime.strptime(date_str.split("T")[0], "%Y-%m-%d")
+    first_day = datetime(d.year, d.month, 1)
+    # compute last day by jumping to next month minus one day
+    if d.month == 12:
+        next_month = datetime(d.year + 1, 1, 1)
+    else:
+        next_month = datetime(d.year, d.month + 1, 1)
+    last_day = next_month - timedelta(days=1)
+    return (first_day.day, first_day.month, first_day.year, last_day.day, last_day.month, last_day.year)
+
+
+def _extract_file_paths(api_response):
+    """Extract list of file paths from API response structure."""
+    if not api_response:
+        return []
+    if isinstance(api_response, list):
+        if all(isinstance(item, str) for item in api_response):
+            return api_response
+    if isinstance(api_response, dict):
+        for key in ("filePaths", "files", "data", "result"):
+            value = api_response.get(key)
+            if isinstance(value, list):
+                return value
+    if hasattr(api_response, "_data"):
+        return _extract_file_paths(api_response._data)
+    return api_response if isinstance(api_response, list) else []
+
+
+def get_file_list(trading, data_item: dict):
+    """Call Betfair DownloadListOfFiles API for a purchased month."""
+    purchase_item_id = data_item.get("purchaseItemId")
+    plan_display = data_item.get("plan") or "Basic Plan"
+    plan_name = _map_plan_name(plan_display)
+    sport = data_item.get("sport") or SPORT
+    date_str = data_item.get("forDate")
+
+    if not purchase_item_id or not date_str:
         return None
 
+    try:
+        (
+            from_day,
+            from_month,
+            from_year,
+            to_day,
+            to_month,
+            to_year,
+        ) = _month_range_from_iso(date_str)
+    except Exception:
+        print(f"  WARNING: Unable to parse date {date_str}")
+        return None
 
-def download_file(trading, file_path, purchase_item_id):
+    response = trading.historic.get_file_list(
+        sport=sport,
+        plan=plan_display,
+        from_day=str(from_day),
+        from_month=str(from_month),
+        from_year=str(from_year),
+        to_day=str(to_day),
+        to_month=str(to_month),
+        to_year=str(to_year),
+        event_id=None,
+        event_name=None,
+        market_types_collection=None,
+        countries_collection=None,
+        file_type_collection=None,
+    )
+
+    file_paths = _extract_file_paths(response)
+    if not file_paths:
+        print(f"  WARNING: No file paths returned for {sport} {date_str}")
+        return None
+
+    files = []
+    for path in file_paths:
+        if not isinstance(path, str):
+            continue
+        local_dir, local_name = _build_local_path(plan_name, path)
+        files.append(
+            {
+                "file_path": path,
+                "filePath": path,
+                "local_dir": local_dir,
+                "local_filename": local_name,
+                "purchaseItemId": purchase_item_id,
+            }
+        )
+
+    return files or None
+
+
+def download_file(trading, file_path, purchase_item_id, local_dir=None, local_filename=None):
     """Download a specific historical data file."""
     try:
-        # Extract filename from path
-        filename = os.path.basename(file_path)
-        output_path = os.path.join(OUTPUT_DIR, filename)
-        
-        # Skip if already downloaded
-        if os.path.exists(output_path):
-            print(f"  SKIP: {filename} (already exists)")
-            return True
-        
-        print(f"  Downloading: {filename}...", end='', flush=True)
-        
-        # Download the file
-        response = trading.historic.download_file(
-            file_path=file_path,
-            purchase_item_id=purchase_item_id
+        filename = local_filename or os.path.basename(file_path.strip("/"))
+        base_dir = os.path.abspath(OUTPUT_DIR)
+        dest_dir = (
+            os.path.abspath(os.path.join(base_dir, local_dir))
+            if local_dir
+            else base_dir
         )
-        
-        # Save to local file
-        with open(output_path, 'wb') as f:
-            f.write(response)
-        
+        os.makedirs(dest_dir, exist_ok=True)
+        output_path = os.path.join(dest_dir, filename)
+
+        if os.path.exists(output_path):
+            print(f"  SKIP: {output_path} (already exists)")
+            return True
+
+        print(
+            f"  Downloading to {output_path} (API path: {file_path})...",
+            end="",
+            flush=True,
+        )
+
+        # Let betfairlightweight handle streaming directly into dest_dir
+        trading.historic.download_file(file_path=file_path, store_directory=dest_dir)
+
+        if not os.path.exists(output_path):
+            raise Exception("Download reported success but file not found")
+
         file_size = os.path.getsize(output_path)
+        if file_size < 50:
+            with open(output_path, "rb") as f:
+                preview = f.read(200).decode("utf-8", errors="ignore")
+            raise Exception(
+                f"Downloaded file looks invalid (size={file_size} bytes): {preview}"
+            )
+
         print(f" OK ({file_size:,} bytes)")
         return True
         
@@ -258,22 +404,34 @@ def main():
         
         print(f"\nProcessing: {sport} - {date} (ID: {purchase_item_id})")
         
-        # Get file list for this item
-        file_list = get_file_list(trading, purchase_item_id)
-        
-        if not file_list:
-            print("  No files found for this item")
+        # Get file list for this item/month (constructs path directly)
+        try:
+            file_list = get_file_list(trading, item)
+            
+            if not file_list:
+                print("  No files found for this item")
+                continue
+            
+            # Try each file path returned by API until one succeeds
+            downloaded = False
+            for file_info in file_list:
+                file_path = file_info.get('file_path') or file_info.get('filePath')
+                local_filename = file_info.get('local_filename')
+                local_dir = file_info.get('local_dir')
+                if file_path:
+                    success = download_file(trading, file_path, purchase_item_id, local_dir, local_filename)
+                    if success:
+                        total_downloaded += 1
+                        downloaded = True
+                        break
+
+            if not downloaded:
+                total_failed += 1
+                print("  All available file paths failed for this item")
+        except Exception as e:
+            print(f"  ERROR processing item: {e}")
+            total_failed += 1
             continue
-        
-        # Download each file
-        for file_info in file_list:
-            file_path = file_info.get('file_path') or file_info.get('filePath')
-            if file_path:
-                success = download_file(trading, file_path, purchase_item_id)
-                if success:
-                    total_downloaded += 1
-                else:
-                    total_failed += 1
     
     # Summary
     print("\n" + "=" * 70)
