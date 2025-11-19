@@ -419,11 +419,25 @@ def main():
                 local_filename = file_info.get('local_filename')
                 local_dir = file_info.get('local_dir')
                 if file_path:
+                    '''
+                    filename = local_filename or os.path.basename(file_path.strip("/"))
+                    base_dir = os.path.abspath(OUTPUT_DIR)
+                    dest_dir = (
+                        os.path.abspath(os.path.join(base_dir, local_dir))
+                        if local_dir
+                        else base_dir
+                    )
+                    output_path = os.path.join(dest_dir, filename)
+                    if os.path.exists(output_path):
+                        print(f"  SKIP: {output_path} (already exists)")
+                        downloaded = True
+                        continue
+                    '''
                     success = download_file(trading, file_path, purchase_item_id, local_dir, local_filename)
                     if success:
                         total_downloaded += 1
                         downloaded = True
-                        break
+                       #break
 
             if not downloaded:
                 total_failed += 1
