@@ -21,8 +21,8 @@ BETFAIR_APP_KEY = "vPNcomt9ZMAxsVqw"   # Fill in your Betfair app key
 OUTPUT_DIR = "football_data_zip"  # Directory to save downloaded files
 SPORT = "Soccer"  # Sport name in Betfair system
 
-# Number of processes (1, 2, 3, or 4)
-NUM_PROCESSES = 4  # Change this to 1, 2, 3, or 4
+# Number of processes (1, 2, 3, 4, 6, or 12)
+NUM_PROCESSES = 4  # Change this to 1, 2, 3, 4, 6, or 12
 
 # Default certificates directory inside the project root
 # Will be resolved relative to this file, i.e. "<project>/Certificates"
@@ -415,6 +415,25 @@ def should_process_month(month, process_id, total_processes):
         else:  # process_id == 4
             return month in [4, 8, 12]
     
+    # X=6: Process 1: 1,7; Process 2: 2,8; Process 3: 3,9; Process 4: 4,10; Process 5: 5,11; Process 6: 6,12
+    elif total_processes == 6:
+        if process_id == 1:
+            return month in [1, 7]
+        elif process_id == 2:
+            return month in [2, 8]
+        elif process_id == 3:
+            return month in [3, 9]
+        elif process_id == 4:
+            return month in [4, 10]
+        elif process_id == 5:
+            return month in [5, 11]
+        else:  # process_id == 6
+            return month in [6, 12]
+    
+    # X=12: Each process handles exactly one month
+    elif total_processes == 12:
+        return month == process_id
+    
     return False
 
 
@@ -494,8 +513,8 @@ def main():
     print(f"Number of processes: {NUM_PROCESSES}")
     
     # Validate NUM_PROCESSES
-    if NUM_PROCESSES not in [1, 2, 3, 4]:
-        print(f"ERROR: NUM_PROCESSES must be 1, 2, 3, or 4 (current value: {NUM_PROCESSES})")
+    if NUM_PROCESSES not in [1, 2, 3, 4, 6, 12]:
+        print(f"ERROR: NUM_PROCESSES must be 1, 2, 3, 4, 6, or 12 (current value: {NUM_PROCESSES})")
         sys.exit(1)
     
     # Setup
