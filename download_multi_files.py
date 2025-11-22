@@ -22,7 +22,7 @@ OUTPUT_DIR = "football_data_zip"  # Directory to save downloaded files
 SPORT = "Soccer"  # Sport name in Betfair system
 
 # Number of processes (1, 2, 3, or 4)
-NUM_PROCESSES = 2  # Change this to 1, 2, 3, or 4
+NUM_PROCESSES = 4  # Change this to 1, 2, 3, or 4
 
 # Default certificates directory inside the project root
 # Will be resolved relative to this file, i.e. "<project>/Certificates"
